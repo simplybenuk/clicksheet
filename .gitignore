@@ -1,0 +1,11 @@
+# Local workflow, planning, and host state are not runtime inputs.
+/.agents/
+/.construction/
+/.codex/
+/docs/
+
+# Reproducible build and test output is not required by the extension at runtime.
+/node_modules/
+/build/
+/dist/
+/coverage/

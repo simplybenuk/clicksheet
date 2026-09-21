@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clicksheet supported-page fixture</title>
+    <link rel="stylesheet" href="/fixture.css">
+    <script type="module" src="/fixture.js"></script>
+  </head>
+  <body data-fixture-page="supported">
+    <header class="site-header">
+      <a class="brand" href="/">Northstar Admin</a>
+      <nav aria-label="Primary navigation">
+        <a href="#overview">Overview</a>
+        <a href="#settings">Settings</a>
+      </nav>
+    </header>
+
+    <main class="page-shell">
+      <p class="eyebrow">Clicksheet browser fixture</p>
+      <h1>Supported page</h1>
+      <p class="lede">A small local page for loading the extension and exercising future journey-capture scenarios.</p>
+
+      <section class="fixture-card" id="overview" aria-labelledby="overview-title">
+        <div>
+          <p class="eyebrow">Async interaction</p>
+          <h2 id="overview-title">Workspace overview</h2>
+          <p data-role="result" aria-live="polite">No changes yet.</p>
+        </div>
+        <button type="button" data-action="load-details">Load details</button>
+      </section>
+
+      <section class="fixture-card" id="settings" aria-labelledby="settings-title">
+        <p class="eyebrow">Sensitive-field fixture</p>
+        <h2 id="settings-title">Account settings</h2>
+        <label>
+          Password
+          <input type="password" value="fixture-secret" autocomplete="current-password">
+        </label>
+      </section>
+    </main>
+  </body>
+</html>
