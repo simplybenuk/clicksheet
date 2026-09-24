@@ -40,6 +40,12 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "clicksheet:open-storage" && sender.id === chrome.runtime.id) {
+    void chrome.runtime.openOptionsPage();
+  }
+});
+
 async function notifyTab(tabId, state) {
   try {
     await chrome.scripting.insertCSS({

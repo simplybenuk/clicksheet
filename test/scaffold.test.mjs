@@ -17,6 +17,7 @@ test("the extension manifest uses temporary active-tab access", () => {
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, "module");
   assert.equal(manifest.action.default_title, "Open Clicksheet");
+  assert.deepEqual(manifest.options_ui, { page: "pages/storage.html", open_in_tab: true });
 });
 
 test("supported-page classification accepts standard web pages only", () => {
@@ -57,4 +58,6 @@ test("the build output contains a loadable extension package", () => {
   assert.equal(existsSync(resolve(projectRoot, "dist/service-worker.js")), true);
   assert.equal(existsSync(resolve(projectRoot, "dist/content/toolbar.js")), true);
   assert.equal(existsSync(resolve(projectRoot, "dist/content/toolbar.css")), true);
+  assert.equal(existsSync(resolve(projectRoot, "dist/pages/storage.html")), true);
+  assert.equal(existsSync(resolve(projectRoot, "dist/core/storage.js")), true);
 });

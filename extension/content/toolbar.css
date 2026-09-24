@@ -104,7 +104,7 @@
   color: #ffbe72;
 }
 
-#clicksheet-toolbar-root .clicksheet-toolbar__dismiss {
+#clicksheet-toolbar-root .clicksheet-toolbar__button {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
   padding: 7px 10px;
@@ -115,8 +115,8 @@
   font-size: 12px;
 }
 
-#clicksheet-toolbar-root .clicksheet-toolbar__dismiss:hover,
-#clicksheet-toolbar-root .clicksheet-toolbar__dismiss:focus-visible {
+#clicksheet-toolbar-root .clicksheet-toolbar__button:hover,
+#clicksheet-toolbar-root .clicksheet-toolbar__button:focus-visible {
   border-color: #6ca5ff;
   outline: none;
 }
