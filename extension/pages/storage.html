@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clicksheet storage</title>
+    <link rel="stylesheet" href="storage.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__header">
+        <span class="page__mark" aria-hidden="true">C</span>
+        <div>
+          <h1>Clicksheet storage</h1>
+          <p>Journeys, screenshots, and exports are saved as readable files in a folder you choose. Nothing is uploaded.</p>
+        </div>
+      </header>
+
+      <section class="panel" aria-labelledby="folder-heading">
+        <div class="panel__head">
+          <h2 id="folder-heading">Storage folder</h2>
+          <span class="status" data-role="save-status" aria-live="polite"></span>
+        </div>
+        <p class="folder" data-role="folder-name">No folder selected</p>
+        <p class="message" data-role="message" aria-live="polite"></p>
+        <div class="actions">
+          <button type="button" data-action="choose" disabled>Choose folder</button>
+          <button type="button" data-action="reconnect" hidden>Reconnect folder</button>
+          <button type="button" data-action="locate" hidden>Locate folder…</button>
+          <button type="button" data-action="move" hidden>Move to another folder…</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="journeys-heading">
+        <div class="panel__head">
+          <h2 id="journeys-heading">Journeys</h2>
+          <button type="button" data-action="new-journey" disabled>New Journey</button>
+        </div>
+        <p class="hint">Journeys saved in the selected folder. Rename one to check that changes save.</p>
+        <ul class="journeys" data-role="journeys"></ul>
+      </section>
+    </main>
+    <script type="module" src="storage.js"></script>
+  </body>
+</html>

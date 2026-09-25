@@ -6,9 +6,9 @@
   "description": "A Chrome extension that turns browser journeys into visual context.",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node --check extension/service-worker.js && node --check extension/core/supported-pages.js && node --check extension/content/toolbar.js && node --check scripts/build.mjs && node --check scripts/serve-fixture.mjs",
+    "check": "node scripts/check.mjs",
     "fixture": "node scripts/serve-fixture.mjs",
-    "test:unit": "node --test",
+    "test:unit": "node --test \"test/**/*.test.mjs\"",
     "test": "npm run check && npm run build && npm run test:unit"
   }
 }

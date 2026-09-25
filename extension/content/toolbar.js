@@ -50,13 +50,17 @@
         </div>
         <div class="clicksheet-toolbar__controls">
           <span class="clicksheet-toolbar__status" data-role="status"></span>
-          <button type="button" class="clicksheet-toolbar__dismiss" data-action="dismiss">Dismiss</button>
+          <button type="button" class="clicksheet-toolbar__button" data-action="storage">Storage</button>
+          <button type="button" class="clicksheet-toolbar__button" data-action="dismiss">Dismiss</button>
         </div>
       </div>
     `;
 
     root.querySelector('[data-role="status"]').textContent = statusLabel;
     root.querySelector('[data-role="message"]').textContent = currentState.message;
+    root.querySelector('[data-action="storage"]').addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "clicksheet:open-storage" });
+    });
     root.querySelector('[data-action="dismiss"]').addEventListener("click", () => {
       root.remove();
     });

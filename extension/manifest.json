@@ -14,5 +14,9 @@
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
+  },
+  "options_ui": {
+    "page": "pages/storage.html",
+    "open_in_tab": true
   }
 }

@@ -1,0 +1,179 @@
+:root {
+  color-scheme: dark;
+  --surface: #11151c;
+  --panel: #1a2029;
+  --border: rgba(255, 255, 255, 0.1);
+  --text: #f4f7fb;
+  --muted: #9aa6b8;
+  --accent: #3a83f7;
+  --ok: #73d39b;
+  --warn: #ffbe72;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.page {
+  display: grid;
+  gap: 20px;
+  width: min(720px, 100% - 32px);
+  margin: 40px auto;
+}
+
+.page__header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.page__header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.page__header p,
+.hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.page__mark {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent);
+  font-weight: 800;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  background: var(--panel);
+}
+
+.panel__head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.folder {
+  margin: 12px 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.message {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.message:empty {
+  display: none;
+}
+
+.message[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.status {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.status[data-status="Saved locally"] {
+  color: var(--ok);
+}
+
+.status[data-status="Storage unavailable"] {
+  color: var(--warn);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: #232b36;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+button:hover,
+button:focus-visible {
+  border-color: #6ca5ff;
+  outline: none;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.journeys {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journeys:empty::after {
+  content: "No Journeys yet.";
+  color: var(--muted);
+}
+
+.journey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.journey input {
+  flex: 1 1 240px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.journey input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.journey time {
+  color: var(--muted);
+  font-size: 12px;
+}
