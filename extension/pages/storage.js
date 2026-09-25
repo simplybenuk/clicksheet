@@ -61,13 +61,21 @@ function renderJourneys(view) {
       row.input.value = journey.name;
     }
 
-    row.input.disabled = !view.editable;
+    row.input.disabled = !view.renamable;
     row.updated.dateTime = journey.updatedAt;
     row.updated.textContent = `Updated ${new Date(journey.updatedAt).toLocaleString()}`;
     return row.item;
   });
 
-  elements.journeys.replaceChildren(...items);
+  // Only move rows that are out of place: moving the focused input's row out
+  // of the document (as replaceChildren does) blurs it on every keystroke.
+  items.forEach((item, index) => {
+    const current = elements.journeys.children[index] ?? null;
+
+    if (current !== item) {
+      elements.journeys.insertBefore(item, current);
+    }
+  });
 }
 
 function createRow(id) {
@@ -150,6 +158,8 @@ window.addEventListener("focus", () => {
 window.addEventListener("beforeunload", (event) => {
   if (session.snapshot().hasUnsavedChanges) {
     event.preventDefault();
+    // Older Chrome versions show the prompt only when returnValue is set.
+    event.returnValue = "";
     void session.flush();
   }
 });

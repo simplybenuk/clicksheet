@@ -85,6 +85,9 @@ export function createLibrarySession({
       hasRoot: Boolean(state.root),
       available: state.available,
       editable: state.available && !state.moving && !state.connecting,
+      // Renames stay possible while the folder is unavailable: they are held in
+      // memory and written after Reconnect or Locate, never anywhere else.
+      renamable: Boolean(state.root) && !state.moving && !state.connecting,
       moving: state.moving,
       status: status(),
       // True while any edit or new Journey is not yet on disk, including while
