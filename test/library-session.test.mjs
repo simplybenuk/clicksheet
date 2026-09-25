@@ -473,3 +473,34 @@ test("unsaved changes are reported while a write waits for the storage lock", as
   assert.equal(session.snapshot().hasUnsavedChanges, false);
   assert.equal(await journeyName(volume.root, journey.id), "In flight");
 });
+
+test("a rename made after access is lost is held and saved on Reconnect", async () => {
+  const volume = createVolume();
+  const other = createVolume("other");
+  const { session } = setup();
+  await session.chooseRoot(volume.root);
+  const journey = session.createJourney();
+  await session.flush();
+  const otherBefore = snapshot(other.root);
+
+  // The page notices the missing folder before the user types.
+  volume.removed = true;
+  await session.refreshAccess();
+  assert.equal(session.snapshot().status, SAVE_STATUS.unavailable);
+  assert.equal(session.snapshot().renamable, true);
+
+  session.rename(journey.id, "Held");
+  await session.flush();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const view = session.snapshot();
+  assert.equal(view.status, SAVE_STATUS.unavailable);
+  assert.equal(view.hasUnsavedChanges, true);
+  assert.match(view.message.text, /could not be found/);
+  assert.deepEqual(snapshot(other.root), otherBefore);
+
+  volume.removed = false;
+  assert.equal(await session.reconnect(), true);
+  assert.equal(await journeyName(volume.root, journey.id), "Held");
+  assert.equal(session.snapshot().hasUnsavedChanges, false);
+});
