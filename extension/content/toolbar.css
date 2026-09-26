@@ -37,3 +37,12 @@
 }
 #clicksheet-toolbar-root .clicksheet-toolbar__frame img { display: block; width: 100%; height: 64px; object-fit: contain; margin-bottom: 5px; }
 #clicksheet-toolbar-root .clicksheet-toolbar__frame span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame-actions button { padding: 4px 9px; font-size: 12px; }
+#clicksheet-toolbar-root [data-action="undo"] { border-color: #66a3ff; }
+#clicksheet-toolbar-root .clicksheet-toolbar__controls { position: relative; }
+#clicksheet-toolbar-root .clicksheet-toolbar__menu { display: grid; gap: 8px; margin-top: 10px; padding: 12px; background: #252a35; border: 1px solid #4e596b; border-radius: 10px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__menu label { display: grid; gap: 4px; color: #d7e0ee; font-size: 12px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__menu select { background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px; font: inherit; }
+#clicksheet-toolbar-root .clicksheet-toolbar__menu p { margin: 0; color: #b6c6dd; font-size: 11px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame[draggable="true"] { cursor: grab; }

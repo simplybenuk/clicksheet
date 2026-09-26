@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clicksheet long fixture page</title>
+    <link rel="stylesheet" href="/fixture.css">
+    <style>
+      .site-header { position: sticky; top: 0; z-index: 1; }
+      .long-section { min-height: 700px; border-top: 4px solid #cbd5e1; padding-top: 24px; }
+    </style>
+  </head>
+  <body data-fixture-page="long">
+    <header class="site-header">
+      <a class="brand" href="/">Northstar Admin</a>
+      <span>Sticky header: appears once in a full-page capture</span>
+    </header>
+    <main class="page-shell">
+      <p class="eyebrow">Clicksheet browser fixture</p>
+      <h1>Long page</h1>
+      <p class="lede">Exercises full-page capture, stitching, and the viewport fallback.</p>
+      <section class="long-section"><h2>Section 1 of 4</h2></section>
+      <section class="long-section"><h2>Section 2 of 4</h2>
+        <label>Password on a long page <input type="password" value="long-secret"></label>
+      </section>
+      <section class="long-section"><h2>Section 3 of 4</h2></section>
+      <section class="long-section"><h2>Section 4 of 4 — end of page</h2></section>
+    </main>
+  </body>
+</html>

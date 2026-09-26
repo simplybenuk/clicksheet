@@ -1,86 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createJourneyCoordinator, memoryBindings } from "../extension/core/journey-coordinator.js";
-import { createLibrarySession } from "../extension/core/library-session.js";
+import { memoryBindings } from "../extension/core/journey-coordinator.js";
 import { createStorage } from "../extension/core/storage.js";
 import { createVolume } from "./support/memory-fs.mjs";
-
-const ORIGIN = "https://app.example.test";
-
-function manualClock() {
-  let time = 0;
-  let next = 0;
-  const timers = new Map();
-  return {
-    now: () => time,
-    setTimer: (callback, delay) => { const id = ++next; timers.set(id, { at: time + delay, callback }); return id; },
-    clearTimer: (id) => timers.delete(id),
-    async advance(duration) {
-      const end = time + duration;
-      while (true) {
-        const entry = [...timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
-        if (!entry) break;
-        timers.delete(entry[0]); time = entry[1].at; entry[1].callback();
-        await settle();
-      }
-      time = end;
-      await settle();
-    }
-  };
-}
-
-async function settle() {
-  for (let n = 0; n < 20; n++) await new Promise((done) => setImmediate(done));
-}
-
-function fakeBrowser() {
-  const browser = {
-    calls: [],
-    visible: true,
-    captureError: null,
-    page: { title: "Dashboard", pathname: "/dashboard", viewport: { width: 100, height: 50, scrollX: 0, scrollY: 0, devicePixelRatio: 2 }, masks: [{ x: 1, y: 2, width: 3, height: 4 }] },
-    isVisible: async () => browser.visible,
-    prepare: async (tabId) => { browser.calls.push(["prepare", tabId]); return structuredClone(browser.page); },
-    restore: async (tabId) => { browser.calls.push(["restore", tabId]); },
-    captureVisible: async (tabId) => {
-      browser.calls.push(["capture", tabId]);
-      if (browser.captureError) throw browser.captureError;
-      return new Blob([`pixels of ${browser.page.pathname}`]);
-    },
-    sanitize: async (blob, page) => { browser.calls.push(["sanitize", page.masks.length]); return { blob, width: 200, height: 100 }; },
-    inject: async (tabId) => { browser.calls.push(["inject", tabId]); },
-    notify: async (tabId) => { browser.calls.push(["notify", tabId]); }
-  };
-  return browser;
-}
-
-function setup({ bindings = memoryBindings(), volume = createVolume(), browser = fakeBrowser() } = {}) {
-  let root = volume.root;
-  let nextId = 0;
-  const time = manualClock();
-  const options = {
-    loadRootHandle: async () => root,
-    saveRootHandle: async (handle) => { root = handle; },
-    sessionFactory: (settings) => createLibrarySession({ ...settings, autosaveOptions: { delayMs: 0 }, storageFactory: (handle, storageOptions) => createStorage(handle, { ...storageOptions, createId: () => `journey-${++nextId}` }) }),
-    thumbnail: async (file) => `preview:${await file.text()}`,
-    browser,
-    bindings,
-    createId: () => `id-${++nextId}`,
-    now: time.now,
-    gate: (task) => task(),
-    schedulerOptions: { now: time.now, setTimer: time.setTimer, clearTimer: time.clearTimer }
-  };
-  const coordinator = createJourneyCoordinator(options);
-  const context = { url: `${ORIGIN}/dashboard?token=secret#x`, windowId: 7 };
-  return { volume, browser, time, options, coordinator, context };
-}
-
-async function recording(tabId = 1) {
-  const env = setup();
-  const created = await env.coordinator.request(tabId, { action: "new" });
-  const view = await env.coordinator.request(tabId, { action: "record", journeyId: created.currentJourney.id }, env.context);
-  return { ...env, id: created.currentJourney.id, view };
-}
+import { ORIGIN, recording, setup } from "./support/coordinator.mjs";
 
 const click = (label, x = 10) => ({ type: "click", click: { rect: { x, y: 5, width: 20, height: 10 }, point: { x: x + 5, y: 10 }, scrollX: 0, scrollY: 0, label, pathname: "/dashboard" } });
 
@@ -96,7 +19,7 @@ test("Record captures a sanitized initial frame with the toolbar hidden, then re
   assert.equal(frame.pathname, "/dashboard");
   assert.deepEqual(frame.image, { width: 200, height: 100 });
   assert.equal(frame.interaction, null);
-  assert.deepEqual(browser.calls.slice(0, 4), [["prepare", 1], ["capture", 1], ["restore", 1], ["sanitize", 1]]);
+  assert.deepEqual(browser.calls.slice(0, 4), [["prepare", 1], ["capture", 1], ["sanitize", 1], ["restore", 1]]);
   const stored = await createStorage(volume.root).readScreenshot(id, frame.screenshotFile);
   assert.equal(await stored.text(), "pixels of /dashboard");
   assert.equal((await createStorage(volume.root).loadJourney(id)).state, "Recording");
@@ -289,4 +212,74 @@ test("closing the recorded tab pauses the Journey and releases the binding", asy
   assert.equal(view.currentJourney.pauseReason, "permission");
   assert.equal(view.recordingElsewhere, false);
   assert.equal(view.controls.resume, true);
+});
+
+test("full-page capture stitches scrolled segments and records page-sized metadata", async () => {
+  const stitched = [];
+  const env = setup({ stitch: async (segments, size) => { stitched.push({ segments, size }); return { blob: new Blob(["stitched"]), width: 200, height: 500 }; } });
+  env.browser.page.scrollHeight = 250;
+  env.browser.page.scrollWidth = 100;
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "settings", journeyId: id, settings: { captureArea: "fullPage" } });
+  const view = await env.coordinator.request(1, { action: "capture", journeyId: id }, env.context);
+  const frame = view.currentJourney.frames[0];
+  assert.equal(frame.captureArea, "fullPage");
+  assert.deepEqual(frame.image, { width: 200, height: 500 });
+  assert.deepEqual(frame.viewport, { width: 100, height: 250, scrollX: 0, scrollY: 0, devicePixelRatio: 2 });
+  assert.deepEqual(env.browser.calls.filter(([name]) => name === "scroll"), [["scroll", 0, false], ["scroll", 50, true], ["scroll", 100, true], ["scroll", 150, true], ["scroll", 200, true]]);
+  assert.deepEqual(stitched[0].segments.map((segment) => segment.scrollY), [0, 50, 100, 150, 200]);
+  assert.equal(env.browser.calls.filter(([name]) => name === "capture").length, 1 + stitched[0].segments.length, "viewport first, then each segment");
+  assert.equal(env.browser.calls.at(-1)[0], "restore");
+});
+
+test("a failed full-page capture keeps the viewport capture and warns", async () => {
+  const env = setup({ stitch: async () => { throw Object.assign(new Error("decode failed"), { name: "FullPageError" }); } });
+  env.browser.page.scrollHeight = 150;
+  env.browser.page.scrollWidth = 100;
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "settings", journeyId: id, settings: { captureArea: "fullPage" } });
+  let view = await env.coordinator.request(1, { action: "capture", journeyId: id }, env.context);
+  const frame = view.currentJourney.frames[0];
+  assert.equal(frame.captureArea, "viewport");
+  assert.deepEqual(frame.image, { width: 200, height: 100 });
+  assert.deepEqual(frame.viewport.height, 50);
+  assert.match(view.notice, /full page could not be captured.*visible part/i);
+  env.browser.page.scrollHeight = 5000;
+  view = await env.coordinator.request(1, { action: "capture", journeyId: id }, env.context);
+  assert.match(view.notice, /too long.*visible part/i);
+  assert.equal(view.currentJourney.frames.length, 2);
+});
+
+test("switching tabs during a full-page capture never captures the other tab", async () => {
+  const env = setup({ stitch: async () => ({ blob: new Blob(["x"]), width: 1, height: 1 }) });
+  env.browser.page.scrollHeight = 200;
+  env.browser.page.scrollWidth = 100;
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "settings", journeyId: id, settings: { captureArea: "fullPage" } });
+  const scrollTo = env.browser.scrollTo;
+  env.browser.scrollTo = async (tabId, options) => { if (options.y > 0) env.browser.visible = false; return scrollTo(tabId, options); };
+  await assert.rejects(env.coordinator.request(1, { action: "capture", journeyId: id }, env.context), /Return to the recorded tab/);
+  assert.equal(env.browser.calls.filter(([name]) => name === "capture").length, 2);
+  const view = await env.coordinator.request(1, { action: "snapshot" });
+  assert.equal(view.currentJourney.frames.length, 0);
+});
+
+test("a capture that hits Chrome's quota waits and retries once", async () => {
+  const waits = [];
+  const env = setup({ sleep: async (ms) => { waits.push(ms); } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  let failures = 1;
+  const capture = env.browser.captureVisible;
+  env.browser.captureVisible = async (tabId) => {
+    if (failures-- > 0) throw new Error("This request exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota.");
+    return capture(tabId);
+  };
+  const view = await env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context);
+  assert.equal(view.currentJourney.frames.length, 1);
+  assert.deepEqual(waits, [1000]);
+  failures = 2;
+  await assert.rejects(env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context), /limited how often/);
 });

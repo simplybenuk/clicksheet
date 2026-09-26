@@ -34,6 +34,13 @@
           <div data-role="journeys"></div>
         </div>
         <div class="clicksheet-toolbar__strip" data-role="strip" aria-label="Journey screenshots"></div>
+        <div class="clicksheet-toolbar__frame-actions" data-role="frame-actions">
+          <button type="button" data-action="move-left" disabled>Move left</button>
+          <button type="button" data-action="move-right" disabled>Move right</button>
+          <button type="button" data-action="edit" disabled>Redact…</button>
+          <button type="button" data-action="delete" disabled>Delete</button>
+          <button type="button" data-action="undo" hidden>Undo delete</button>
+        </div>
       </div>
       <div class="clicksheet-toolbar__controls">
         <div><span data-role="state">Ready</span><span data-role="save-status" aria-live="polite"></span></div>
@@ -43,10 +50,28 @@
           <button type="button" data-action="resume" hidden disabled>Resume</button>
           <button type="button" data-action="stop" hidden disabled>Stop</button>
           <button type="button" data-action="capture" disabled>Capture</button>
-          <button type="button" data-action="export" disabled>Export</button>
+          <button type="button" data-action="export" aria-expanded="false" disabled>Export</button>
+          <button type="button" data-action="settings" aria-expanded="false">Settings</button>
           <button type="button" data-action="storage">Storage</button>
           <button type="button" data-action="dismiss">Hide</button>
         </div>
+        <div class="clicksheet-toolbar__menu" data-role="export-menu" hidden>
+          <button type="button" data-action="copy-image">Copy image</button>
+          <button type="button" data-action="download-image">Download image</button>
+        </div>
+        <form class="clicksheet-toolbar__menu" data-role="settings-menu" hidden>
+          <label>Capture area
+            <select data-role="capture-area">
+              <option value="viewport">Visible viewport</option>
+              <option value="fullPage">Full page</option>
+            </select>
+          </label>
+          <label>Capture delay (ms)
+            <input data-role="capture-delay" type="number" min="0" max="10000" step="50" inputmode="numeric">
+          </label>
+          <button type="submit" data-action="save-settings">Save settings</button>
+          <p>Screenshots stay in the folder you chose on this device. They can still show sensitive details you did not redact.</p>
+        </form>
         <p data-role="message" aria-live="polite">Connecting to your local library…</p>
       </div>
     </div>`;
@@ -65,6 +90,9 @@
   let requestTail = Promise.resolve();
   let stopWatching = null;
   let hiddenForCapture = null;
+  let scrollBeforeCapture = null;
+  let hiddenFixed = null;
+  let draggedFrame = null;
   const seenPasswords = new WeakSet();
   const previews = new Map();
   const previewRequests = new Map();
@@ -137,6 +165,23 @@
     action("resume").hidden = journey?.state !== "Paused";
     action("stop").hidden = !active;
     for (const name of ["record", "pause", "resume", "stop", "capture"]) action(name).disabled = busy || !controls[name];
+    action("export").disabled = busy || !view?.canExport;
+    if (action("export").disabled) toggleMenu("export-menu", false);
+    const frames = journey?.frames ?? [];
+    const selectedIndex = frames.findIndex((frame) => frame.id === selectedFrame);
+    if (selectedIndex === -1) selectedFrame = null;
+    const editable = Boolean(view?.editable) && !busy && selectedIndex !== -1;
+    action("move-left").disabled = !editable || selectedIndex === 0;
+    action("move-right").disabled = !editable || selectedIndex === frames.length - 1;
+    action("edit").disabled = !editable;
+    action("delete").disabled = !editable;
+    action("undo").hidden = !view?.undo;
+    action("undo").disabled = busy || !view?.editable;
+    if (document.activeElement !== role("capture-delay") && journey) {
+      role("capture-area").value = journey.settings?.captureArea ?? "viewport";
+      role("capture-delay").value = String(journey.settings?.captureDelayMs ?? 500);
+    }
+    action("save-settings").disabled = busy || !journey || !view?.editable;
     observer.disconnect();
     role("strip").replaceChildren(...(journey?.frames ?? []).map((frame, index) => {
       const button = document.createElement("button");
@@ -154,6 +199,20 @@
       button.dataset.journeyId = journey.id;
       observer.observe(button);
       button.addEventListener("click", () => { selectedFrame = frame.id; render(); });
+      button.addEventListener("keydown", (event) => {
+        if ((event.key === "Delete" || event.key === "Backspace") && !action("delete").disabled) { selectedFrame = frame.id; void run({ action: "delete-frame", frameId: frame.id }); }
+      });
+      // Drag and drop reorders; Move left/right offers the same without a pointer.
+      button.draggable = Boolean(view?.editable);
+      button.addEventListener("dragstart", (event) => { draggedFrame = frame.id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", ""); });
+      button.addEventListener("dragend", () => { draggedFrame = null; });
+      button.addEventListener("dragover", (event) => { if (draggedFrame && draggedFrame !== frame.id) event.preventDefault(); });
+      button.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const moving = draggedFrame;
+        draggedFrame = null;
+        if (moving && moving !== frame.id) { selectedFrame = moving; void run({ action: "move-frame", frameId: moving, toIndex: index }); }
+      });
       return button;
     }));
     const add = document.createElement("button");
@@ -205,6 +264,8 @@
         action("library").setAttribute("aria-expanded", "false");
         role("name").value = view.currentJourney?.name ?? "";
       }
+      if (command.action === "delete-frame") notice = "Screenshot deleted. Use Undo delete to restore it.";
+      if (command.action === "undo-delete") selectedFrame = command.frameId ?? selectedFrame;
       if (["record", "resume", "capture"].includes(command.action)) {
         selectedFrame = view.currentJourney?.frames.at(-1)?.id ?? selectedFrame;
         const strip = role("strip");
@@ -312,16 +373,78 @@
     if (hiddenForCapture === null) hiddenForCapture = root.hidden;
     root.hidden = true;
     await afterPaint();
+    const page = document.scrollingElement ?? document.documentElement;
     return {
       title: document.title,
       pathname: location.pathname,
       viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY, devicePixelRatio },
+      scrollWidth: page.scrollWidth,
+      scrollHeight: page.scrollHeight,
       masks: passwordMasks()
     };
   }
+  // Full-page capture: scroll in steps and report where the page really is.
+  async function scrollForCapture({ y, hideFixed }) {
+    if (scrollBeforeCapture === null) scrollBeforeCapture = { x: scrollX, y: scrollY };
+    if (hideFixed && hiddenFixed === null) {
+      hiddenFixed = [];
+      for (const element of document.body?.querySelectorAll("*") ?? []) {
+        if (root.contains(element)) continue;
+        const position = getComputedStyle(element).position;
+        if (position !== "fixed" && position !== "sticky") continue;
+        hiddenFixed.push([element, element.style.getPropertyValue("visibility"), element.style.getPropertyPriority("visibility")]);
+        element.style.setProperty("visibility", "hidden", "important");
+      }
+    }
+    window.scrollTo({ left: scrollBeforeCapture.x, top: y, behavior: "instant" });
+    await afterPaint();
+    return { scrollY: window.scrollY, masks: passwordMasks() };
+  }
   function restoreCapture() {
+    for (const [element, value, priority] of hiddenFixed ?? []) {
+      if (value) element.style.setProperty("visibility", value, priority);
+      else element.style.removeProperty("visibility");
+    }
+    hiddenFixed = null;
+    if (scrollBeforeCapture !== null) window.scrollTo({ left: scrollBeforeCapture.x, top: scrollBeforeCapture.y, behavior: "instant" });
+    scrollBeforeCapture = null;
     if (hiddenForCapture !== null) root.hidden = hiddenForCapture;
     hiddenForCapture = null;
+  }
+
+  // Copy must call the clipboard inside the click, so the rendered PNG is
+  // passed to it as a promise. Download stays available if copying fails.
+  function pngFromDataUrl(dataUrl) {
+    const binary = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type: "image/png" });
+  }
+  function copyImage() {
+    if (busy) return;
+    toggleMenu("export-menu", false);
+    busy = true;
+    notice = "Preparing the image…";
+    render();
+    const rendered = request({ action: "export", destination: "copy" }).then((result) => pngFromDataUrl(result.image));
+    let copied;
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("unsupported");
+      copied = navigator.clipboard.write([new ClipboardItem({ "image/png": rendered })]);
+    } catch (error) {
+      copied = Promise.reject(error);
+    }
+    Promise.allSettled([rendered, copied]).then(([image, clipboard]) => {
+      if (image.status === "rejected") notice = image.reason.message;
+      else if (clipboard.status === "rejected") notice = "The image could not be copied on this page. Use Download image instead.";
+      else notice = "Copied the contact sheet. Paste it into your agent or issue.";
+    }).finally(() => { busy = false; render(); });
+  }
+  function toggleMenu(name, open) {
+    const menu = role(name);
+    const button = action(name === "export-menu" ? "export" : "settings");
+    menu.hidden = open === undefined ? !menu.hidden : !open;
+    button.setAttribute("aria-expanded", String(!menu.hidden));
   }
 
   role("name").addEventListener("input", () => {
@@ -339,6 +462,28 @@
   });
   action("new").addEventListener("click", () => run({ action: "new" }));
   for (const name of ["record", "pause", "resume", "stop", "capture"]) action(name).addEventListener("click", () => run({ action: name }));
+  action("export").addEventListener("click", () => { toggleMenu("settings-menu", false); toggleMenu("export-menu"); });
+  action("settings").addEventListener("click", () => { toggleMenu("export-menu", false); toggleMenu("settings-menu"); });
+  action("copy-image").addEventListener("click", copyImage);
+  action("download-image").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "download" }); });
+  role("settings-menu").addEventListener("submit", (event) => {
+    event.preventDefault();
+    toggleMenu("settings-menu", false);
+    void run({ action: "settings", settings: { captureArea: role("capture-area").value, captureDelayMs: Number(role("capture-delay").value) } });
+  });
+  const moveSelected = (offset) => {
+    const frames = view?.currentJourney?.frames ?? [];
+    const index = frames.findIndex((frame) => frame.id === selectedFrame);
+    if (index !== -1) void run({ action: "move-frame", frameId: selectedFrame, toIndex: index + offset });
+  };
+  action("move-left").addEventListener("click", () => moveSelected(-1));
+  action("move-right").addEventListener("click", () => moveSelected(1));
+  action("delete").addEventListener("click", () => { if (selectedFrame) void run({ action: "delete-frame", frameId: selectedFrame }); });
+  action("undo").addEventListener("click", () => run({ action: "undo-delete" }));
+  action("edit").addEventListener("click", () => {
+    if (!selectedFrame || !view?.currentJourney) return;
+    void chrome.runtime.sendMessage({ type: "clicksheet:open-editor", journeyId: view.currentJourney.id, frameId: selectedFrame });
+  });
   action("storage").addEventListener("click", () => { void flushRename().catch(() => {}); void chrome.runtime.sendMessage({ type: "clicksheet:open-storage" }); });
   action("dismiss").addEventListener("click", () => { root.hidden = true; void flushRename().catch(() => {}); });
   window.addEventListener("beforeunload", (event) => {
@@ -360,6 +505,10 @@
     }
     if (message?.type === "clicksheet:prepare-capture") {
       prepareCapture().then(respond, () => respond(null));
+      return true;
+    }
+    if (message?.type === "clicksheet:scroll-capture") {
+      scrollForCapture(message).then(respond, () => respond(null));
       return true;
     }
     if (message?.type === "clicksheet:restore-capture") {

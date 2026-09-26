@@ -11,10 +11,17 @@ import {
   transitionJourney
 } from "./journey.js";
 import { createCaptureScheduler, createRateGate } from "./capture-scheduler.js";
+import { renderContactSheet } from "./export-renderer.js";
+import { fullPageViewport, planFullPage, stitchSegments } from "./full-page.js";
+import { applyMasks } from "./redaction.js";
 
 // A navigation or visible change this long after a click is still attributed to it.
 export const CLICK_WINDOW_MS = 2500;
 const REENTRY_REASONS = new Set(["permission", "navigation"]);
+// Any of these ends the one-step Undo window for a deleted screenshot.
+const ENDS_UNDO = new Set(["delete-frame", "move-frame", "redact", "record", "resume", "capture", "stop", "new", "open", "settings"]);
+const CAPTURE_AREAS = new Set(["viewport", "fullPage"]);
+const QUOTA_ERROR = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i;
 
 export class CaptureError extends Error {
   constructor(message, { pauseReason = null, cause } = {}) {
@@ -48,12 +55,22 @@ export function createJourneyCoordinator({
   createId = () => crypto.randomUUID(),
   now = () => Date.now(),
   clock = () => new Date().toISOString(),
-  gate = createRateGate(),
-  schedulerOptions = {}
+  // Chrome allows two captures per second, but calls spaced exactly 500ms
+  // apart still trip its quota in practice, so leave some headroom.
+  gate = createRateGate({ minIntervalMs: 600 }),
+  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+  schedulerOptions = {},
+  renderSheet = (journey, loadImage) => renderContactSheet(journey, { loadImage }),
+  decodeImage = (blob) => createImageBitmap(blob),
+  stitch = stitchSegments,
+  redactImage = applyMasks
 }) {
   const session = sessionFactory({ loadRootHandle, saveRootHandle });
   const clicks = new Map();
   const notices = new Map();
+  // One deleted screenshot can be restored; its file is removed once the
+  // Undo window ends so deleted pixels do not linger in the folder.
+  let undo = null;
   let memory = null;
   let scheduler = null;
   let tail = Promise.resolve();
@@ -138,34 +155,92 @@ export function createJourneyCoordinator({
   }
 
   // Captures the visible tab with the toolbar hidden and password fields
-  // masked. Pixels are sanitized before anything reaches storage.
+  // masked. Pixels are sanitized before anything reaches storage. The viewport
+  // is always captured first, so a failed full-page attempt falls back to it.
   async function capturePage(tabId, kind, journey) {
     if (!browser) throw new CaptureError("Capture is unavailable in this context.");
-    const raw = await gate(async () => {
-      if (!(await browser.isVisible(tabId))) {
-        throw new CaptureError("Return to the recorded tab to capture it.", { pauseReason: "tab" });
-      }
+    let page;
+    let image;
+    let warning = "";
+    try {
+      await assertVisible(tabId);
+      page = await browser.prepare(tabId);
       try {
-        const page = await browser.prepare(tabId);
-        try {
-          return { page, blob: await browser.captureVisible(tabId) };
-        } finally {
-          await browser.restore(tabId).catch(() => {});
+        image = await browser.sanitize(await captureVisible(tabId), page);
+        if (journey.settings?.captureArea === "fullPage") {
+          try {
+            const full = await captureFullPage(tabId, page);
+            if (full.warning) warning = full.warning;
+            else {
+              image = full.image;
+              page = { ...page, viewport: full.viewport };
+            }
+          } catch (error) {
+            if (error instanceof CaptureError && error.pauseReason === "tab") throw error;
+            console.warn("Clicksheet kept a viewport capture because the full-page capture failed.", error?.name, error?.cause?.message ?? error?.message);
+            warning = "The full page could not be captured.";
+          }
         }
-      } catch (error) {
-        throw asCaptureError(error);
+      } finally {
+        await browser.restore(tabId).catch(() => {});
       }
-    });
-    const image = await browser.sanitize(raw.blob, raw.page);
+    } catch (error) {
+      throw asCaptureError(error);
+    }
     const frame = buildFrame({
       id: `frame-${createId()}`,
       kind,
-      page: raw.page,
+      page,
       image,
       capturedAt: clock(),
       segment: journey.recordingSegment ?? 0
     });
+    frame.captureArea = warning || journey.settings?.captureArea !== "fullPage" ? "viewport" : "fullPage";
+    if (warning) notices.set(tabId, `${warning} The visible part of the page was kept instead.`);
     return { frame, blob: image.blob };
+  }
+
+  async function assertVisible(tabId) {
+    if (!(await browser.isVisible(tabId))) {
+      throw new CaptureError("Return to the recorded tab to capture it.", { pauseReason: "tab" });
+    }
+  }
+
+  // The visibility check sits inside the gate, directly before the capture,
+  // because captureVisibleTab captures whichever tab is showing.
+  function captureVisible(tabId) {
+    return gate(async () => {
+      await assertVisible(tabId);
+      try {
+        return await browser.captureVisible(tabId);
+      } catch (error) {
+        if (!QUOTA_ERROR.test(String(error?.message))) throw error;
+        // Another extension or a burst can exhaust the shared quota; one
+        // retry after the window passes is enough to recover (FR-006.12).
+        await sleep(1000);
+        await assertVisible(tabId);
+        return browser.captureVisible(tabId);
+      }
+    });
+  }
+
+  async function captureFullPage(tabId, page) {
+    const plan = planFullPage({
+      scrollWidth: page.scrollWidth,
+      scrollHeight: page.scrollHeight,
+      viewportWidth: page.viewport.width,
+      viewportHeight: page.viewport.height,
+      devicePixelRatio: page.viewport.devicePixelRatio
+    });
+    if (!plan.ok) return { warning: plan.reason };
+    const segments = [];
+    for (const [index, y] of plan.positions.entries()) {
+      // Fixed and sticky elements would repeat in every segment after the first.
+      const position = await browser.scrollTo(tabId, { y, hideFixed: index > 0 });
+      segments.push({ blob: await captureVisible(tabId), scrollY: position.scrollY, masks: position.masks });
+    }
+    const image = await stitch(segments, { width: plan.width, height: plan.height, viewportWidth: page.viewport.width });
+    return { image, viewport: fullPageViewport({ width: plan.width, height: plan.height, devicePixelRatio: page.viewport.devicePixelRatio }) };
   }
 
   // The screenshot is written first; a failed write adds no frame.
@@ -236,9 +311,27 @@ export function createJourneyCoordinator({
     }
   }
 
+  async function endUndo(root) {
+    if (!undo) return;
+    const ended = undo;
+    undo = null;
+    await createStorage(root).deleteScreenshot(ended.journeyId, ended.frame.screenshotFile).catch(() => {});
+  }
+
+  // Files left behind by an Undo window that ended with a worker restart.
+  async function pruneScreenshots(root, journey) {
+    const storage = createStorage(root);
+    const keep = new Set(journey.frames.map((frame) => frame.screenshotFile));
+    if (undo?.journeyId === journey.id) keep.add(undo.frame.screenshotFile);
+    for (const name of await storage.listScreenshots(journey.id).catch(() => [])) {
+      if (!keep.has(name)) await storage.deleteScreenshot(journey.id, name).catch(() => {});
+    }
+  }
+
   async function execute(tabId, command, context) {
     const state = await remember();
     let { root, view } = await sync();
+    if (root && ENDS_UNDO.has(command.action)) await endUndo(root);
     let id = command.journeyId ?? state.selections[tabId];
     if (!find(view, id)) id = view.journeys[0]?.id ?? null;
     if (state.selections[tabId] !== id) {
@@ -324,16 +417,107 @@ export function createJourneyCoordinator({
         await addFrame(root, current, captured);
         break;
       }
+      case "delete-frame": {
+        const index = requireFrame(current, command.frameId, view);
+        const frames = current.frames.filter((_, position) => position !== index);
+        session.updateJourney(current.id, { frames });
+        undo = { journeyId: current.id, frame: current.frames[index], index, tabId };
+        break;
+      }
+      case "undo-delete": {
+        if (!current || !view.editable || undo?.journeyId !== current.id) throw new Error("There is nothing to undo.");
+        const frames = [...current.frames];
+        frames.splice(Math.min(undo.index, frames.length), 0, undo.frame);
+        session.updateJourney(current.id, { frames });
+        undo = null;
+        break;
+      }
+      case "move-frame": {
+        const index = requireFrame(current, command.frameId, view);
+        const target = Math.max(0, Math.min(current.frames.length - 1, Math.trunc(Number(command.toIndex))));
+        if (!Number.isFinite(Number(command.toIndex))) throw new Error("Choose where to move the screenshot.");
+        const frames = [...current.frames];
+        frames.splice(target, 0, ...frames.splice(index, 1));
+        session.updateJourney(current.id, { frames });
+        break;
+      }
+      case "settings": {
+        if (!current || !view.editable) throw new Error("Reconnect storage before changing settings.");
+        const settings = { ...(current.settings ?? {}) };
+        if (command.settings?.captureArea !== undefined) {
+          if (!CAPTURE_AREAS.has(command.settings.captureArea)) throw new Error("Choose viewport or full page.");
+          settings.captureArea = command.settings.captureArea;
+        }
+        if (command.settings?.captureDelayMs !== undefined) {
+          const delay = Number(command.settings.captureDelayMs);
+          if (!Number.isInteger(delay) || delay < 0 || delay > 10000) throw new Error("The capture delay must be a whole number from 0 to 10000 ms.");
+          settings.captureDelayMs = delay;
+        }
+        session.updateJourney(current.id, { settings });
+        if (state.recording?.journeyId === current.id) {
+          state.recording.delayMs = settings.captureDelayMs ?? 500;
+          await persist();
+          if (current.state === JOURNEY_STATE.recording) startScheduler(state.recording.delayMs);
+        }
+        break;
+      }
+      case "redact": {
+        const index = requireFrame(current, command.frameId, view);
+        const frame = current.frames[index];
+        const storage = createStorage(root);
+        const redacted = await redactImage(await storage.readScreenshot(current.id, frame.screenshotFile), command.masks);
+        // A new file name keeps preview caches honest; the original file is
+        // removed after the Journey points at the redacted copy (FR-009.4).
+        const fileName = `${frame.id}-${createId().replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}.png`;
+        await storage.writeScreenshot(current.id, fileName, redacted.blob);
+        const frames = [...current.frames];
+        frames[index] = { ...frame, screenshotFile: fileName, image: { width: redacted.width, height: redacted.height }, redacted: true };
+        session.updateJourney(current.id, { frames });
+        if (!(await session.flush())) {
+          throw new Error("The redaction is held until storage is reconnected. The original screenshot is removed after it saves.");
+        }
+        await storage.deleteScreenshot(current.id, frame.screenshotFile);
+        break;
+      }
+      case "screenshot": {
+        const index = requireFrame(current, command.frameId, view, { editable: false });
+        const frame = current.frames[index];
+        const file = await createStorage(root).readScreenshot(current.id, frame.screenshotFile);
+        return { screenshot: await toDataUrl(file), frame, journeyName: current.name };
+      }
+      case "export": {
+        if (!current || !view.available) throw new Error("Reconnect storage before exporting.");
+        if (!current.frames.length) throw new Error("Export is unavailable because this Journey has no screenshots.");
+        if (!["copy", "download"].includes(command.destination)) throw new Error("Choose Copy image or Download image.");
+        const storage = createStorage(root);
+        const blob = await renderSheet(prepareJourney(current), async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile)));
+        if (command.destination === "copy") return { ...present(tabId), image: await toDataUrl(blob) };
+        const { fileName } = await storage.writeExport(current.id, current.name, blob);
+        notices.set(tabId, `Saved ${fileName} in ${view.folderName}/journeys/${current.id}/exports.`);
+        return { ...present(tabId), exported: { fileName } };
+      }
       case "snapshot":
         break;
       default:
         throw new Error("Unknown Journey action.");
+    }
+    if (root && current && (command.action === "open" || command.action === "stop")) {
+      const selected = find(session.snapshot(), state.selections[tabId]);
+      if (selected) await pruneScreenshots(root, selected);
     }
     if (!["snapshot", "open"].includes(command.action)) {
       const saved = await session.flush();
       if (command.action === "new" && !saved) throw new Error("The new Journey could not be saved. Reconnect storage before trying again.");
     }
     return present(tabId);
+  }
+
+  function requireFrame(current, frameId, view, { editable = true } = {}) {
+    if (!current) throw new Error("Create or open a Journey first.");
+    if (editable ? !view.editable : !view.available) throw new Error("Reconnect storage before editing screenshots.");
+    const index = current.frames.findIndex((frame) => frame.id === frameId);
+    if (index === -1) throw new Error("Screenshot not found. It may have been deleted.");
+    return index;
   }
 
   function requireJourney(current, allowed, state, tabId) {
@@ -367,6 +551,8 @@ export function createJourneyCoordinator({
       controls: selected ? libraryControls(journeyControls(prepareJourney(selected), { available: view.editable, captureReady }), selected, tabId, view) : {},
       recordingHere: state.recording?.tabId === tabId && state.recording.journeyId === selected?.id,
       recordingElsewhere: Boolean(state.recording && state.recording.tabId !== tabId),
+      canExport: Boolean(selected?.frames.length && view.available),
+      undo: undo && undo.journeyId === selected?.id ? { frameId: undo.frame.id } : null,
       notice,
       // Only summaries go into the popover; frames belong to the selected strip.
       journeys: view.journeys.map(({ id, name }) => ({ id, name }))
@@ -488,6 +674,15 @@ export function createJourneyCoordinator({
   };
 }
 
+async function toDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  }
+  return `data:${blob.type || "image/png"};base64,${btoa(binary)}`;
+}
+
 export function originOf(url) {
   try {
     const parsed = new URL(url);
@@ -508,7 +703,7 @@ function asCaptureError(error) {
 export function describeCaptureError(error) {
   const text = String(error?.message ?? "");
   if (error instanceof CaptureError) return text;
-  if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(text)) {
+  if (QUOTA_ERROR.test(text)) {
     return "Chrome limited how often Clicksheet can capture. Wait a moment, then use Capture to add this state.";
   }
   if (/activeTab|all_urls|permission|Cannot access|Receiving end does not exist/i.test(text)) {

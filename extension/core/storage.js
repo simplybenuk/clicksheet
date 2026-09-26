@@ -402,6 +402,23 @@ export function createStorage(
       return (await fileNames(await exportsDirectory(journeyId))).sort();
     },
 
+    // Removing a screenshot file is how deletions and redactions stop pixels
+    // from remaining recoverable through the Journey folder.
+    async deleteScreenshot(journeyId, fileName) {
+      assertScreenshotName(fileName);
+      const directory = await journeyDirectory(journeyId);
+      const screenshots = await directory.getDirectoryHandle(SCREENSHOTS_DIRECTORY);
+      await screenshots.removeEntry(fileName).catch((error) => {
+        if (error?.name !== "NotFoundError") throw error;
+      });
+    },
+
+    async listScreenshots(journeyId) {
+      const directory = await journeyDirectory(journeyId);
+      const screenshots = await directory.getDirectoryHandle(SCREENSHOTS_DIRECTORY, { create: true });
+      return (await fileNames(screenshots)).filter((name) => SCREENSHOT_PATTERN.test(name)).sort();
+    },
+
     async readScreenshot(journeyId, fileName) {
       assertScreenshotName(fileName);
       const directory = await journeyDirectory(journeyId);

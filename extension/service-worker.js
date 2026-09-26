@@ -25,6 +25,12 @@ const browser = {
       return page;
     });
   },
+  scrollTo(tabId, options) {
+    return chrome.tabs.sendMessage(tabId, { type: "clicksheet:scroll-capture", ...options }).then((position) => {
+      if (!Number.isFinite(position?.scrollY)) throw new CaptureError("The page could not be scrolled for a full-page capture.");
+      return position;
+    });
+  },
   restore(tabId) {
     return chrome.tabs.sendMessage(tabId, { type: "clicksheet:restore-capture" });
   },
@@ -52,12 +58,10 @@ async function openClicksheet(tab) {
   const page = classifyPage(tab.url);
 
   if (!page.supported) {
-    await notifyTab(tab.id, {
-      status: "unsupported",
-      message: page.reason
-    });
+    await explainUnavailable(tab.id, page.reason);
     return;
   }
+  await clearUnavailable(tab.id, { force: true });
 
   try {
     await injectToolbar(tab.id);
@@ -68,10 +72,7 @@ async function openClicksheet(tab) {
     await journeys.event(tab.id, { type: "invoked", url: tab.url, windowId: tab.windowId });
   } catch (error) {
     console.warn("Clicksheet could not open on the active page.", error);
-    await notifyTab(tab.id, {
-      status: "unavailable",
-      message: "Clicksheet could not access this page. Try a standard web page."
-    });
+    await explainUnavailable(tab.id, "Clicksheet could not access this page. Try a standard web page.");
   }
 }
 
@@ -79,6 +80,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
   if (message?.type === "clicksheet:open-storage") {
     void chrome.runtime.openOptionsPage();
+    return;
+  }
+  // The editor is an extension page, so the page being recorded can never
+  // read the unredacted screenshot it shows.
+  if (message?.type === "clicksheet:open-editor") {
+    const query = new URLSearchParams({ journey: String(message.journeyId ?? ""), frame: String(message.frameId ?? "") });
+    void chrome.tabs.create({ url: chrome.runtime.getURL(`pages/editor.html?${query}`), index: (sender.tab?.index ?? -1) + 1 });
     return;
   }
   const tabId = sender.tab?.id;
@@ -100,14 +108,37 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   void journeys.event(tabId, { type: "activated", windowId });
 });
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.status === "loading") void clearUnavailable(tabId);
   if (change.status) void journeys.event(tabId, { type: "updated", status: change.status, url: tab.url });
 });
 
 // Messages written for people are passed on; anything else stays generic so
 // internal browser errors never reach the page.
+const USER_FACING_ERRORS = new Set(["CaptureError", "ExportTooLargeError"]);
 function userMessage(error) {
-  if (error instanceof CaptureError || error?.constructor === Error) return error.message;
+  if (USER_FACING_ERRORS.has(error?.name) || error?.constructor === Error) return error.message;
   return "Clicksheet could not complete this action. Reconnect storage and try again.";
+}
+
+// Browser pages, the Web Store, and file URLs cannot show the toolbar, so the
+// reason is shown on the action itself (FR-001.3–4).
+const explained = new Set();
+async function explainUnavailable(tabId, reason) {
+  explained.add(tabId);
+  await Promise.allSettled([
+    chrome.action.setBadgeText({ tabId, text: "!" }),
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#b3261e" }),
+    chrome.action.setTitle({ tabId, title: `Clicksheet is unavailable here. ${reason}` })
+  ]);
+  await notifyTab(tabId, { status: "unsupported", message: reason });
+}
+// Worker memory may be gone, so an explicit invocation always clears the badge.
+async function clearUnavailable(tabId, { force = false } = {}) {
+  if (!explained.delete(tabId) && !force) return;
+  await Promise.allSettled([
+    chrome.action.setBadgeText({ tabId, text: "" }),
+    chrome.action.setTitle({ tabId, title: "Open Clicksheet" })
+  ]);
 }
 
 async function injectToolbar(tabId) {
@@ -128,7 +159,7 @@ async function notifyTab(tabId, state) {
       type: "clicksheet:state",
       ...state
     });
-  } catch (error) {
-    console.warn("Clicksheet could not display its page state.", error);
+  } catch {
+    // Restricted pages cannot be scripted; the action badge explains instead.
   }
 }
