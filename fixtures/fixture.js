@@ -42,3 +42,17 @@ reveal?.addEventListener("click", () => {
 const clock = document.querySelector('[data-role="clock"]');
 let ticks = 0;
 if (clock) window.setInterval(() => { clock.textContent = String(++ticks); }, 400);
+
+// Pagination with an async response: each click must get its own frame even
+// when clicked repeatedly.
+const nextPage = document.querySelector('[data-action="next-page"]');
+const pageList = document.querySelector('[data-role="page-list"]');
+let pageNumber = 1;
+nextPage?.addEventListener("click", () => {
+  nextPage.disabled = true;
+  pageList.textContent = "Loading…";
+  window.setTimeout(() => {
+    pageList.textContent = `Page ${++pageNumber}`;
+    nextPage.disabled = false;
+  }, 120);
+});

@@ -85,7 +85,7 @@ export function createJourneyCoordinator({
   async function remember() {
     if (!memory) {
       const stored = await bindings.load().catch(() => null);
-      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null, lastCaptured: stored?.lastCaptured ?? null };
+      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null, released: stored?.released ?? null, lastCaptured: stored?.lastCaptured ?? null };
     }
     return memory;
   }
@@ -151,7 +151,10 @@ export function createJourneyCoordinator({
 
   async function bind(journey, tabId, context, { newSegment = false } = {}) {
     navigating.delete(tabId);
-    const previous = memory.recording?.journeyId === journey.id ? memory.recording : null;
+    // A binding released by closing the tab keeps its time for a later Resume.
+    const previous = memory.recording?.journeyId === journey.id ? memory.recording
+      : memory.released?.journeyId === journey.id ? memory.released : null;
+    memory.released = null;
     memory.recording = {
       elapsedMs: newSegment ? 0 : previous?.elapsedMs ?? 0,
       activeSince: now(),
@@ -164,10 +167,15 @@ export function createJourneyCoordinator({
     await persist();
   }
 
-  async function unbind() {
+  async function unbind({ keepTime = false } = {}) {
     clicks.clear();
     stopScheduler();
     if (memory.recording) {
+      const bound = memory.recording;
+      memory.released = keepTime ? {
+        journeyId: bound.journeyId,
+        elapsedMs: (bound.elapsedMs ?? 0) + (bound.activeSince != null ? Math.max(0, now() - bound.activeSince) : 0)
+      } : null;
       memory.recording = null;
       await persist();
     }
@@ -682,7 +690,7 @@ export function createJourneyCoordinator({
       case "removed":
         if (bound?.tabId !== tabId) return;
         await applyToBound("permission-lost");
-        await unbind();
+        await unbind({ keepTime: true });
         return;
       case "invoked": {
         if (bound?.tabId !== tabId) return;

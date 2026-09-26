@@ -424,3 +424,14 @@ test("a navigation that both starts and completes during a capture is not lost a
   assert.equal(view.currentJourney.state, "Recording");
   assert.equal(view.currentJourney.frames.at(-1).pathname, "/users");
 });
+
+test("resuming after the recorded tab closed keeps the segment's elapsed time", async () => {
+  const { coordinator, time, id, context } = await recording();
+  await time.advance(3000);
+  await coordinator.forgetTab(1);
+  await time.advance(60000);
+  let view = await coordinator.request(2, { action: "resume", journeyId: id }, context);
+  await time.advance(1000);
+  view = await coordinator.request(2, { action: "snapshot", journeyId: id });
+  assert.equal(view.elapsedMs, 4000);
+});

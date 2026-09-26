@@ -333,19 +333,34 @@
   let ambientObserver = null;
   let ambientHistory = new WeakMap();
   const changedElement = (record) => record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement;
+  // Clicks and keys can start slow async work, so their window is long.
+  // Hover and focus styling applies at once, so theirs is short: the mouse
+  // moves constantly, and a long window would hide every clock tick.
+  let quietUntil = -Infinity;
+  const INPUT_QUIET_MS = { pointerdown: WATCH_MS, click: WATCH_MS, keydown: WATCH_MS, pointerover: 150, pointerout: 150, focusin: 150 };
+  for (const [type, quietMs] of Object.entries(INPUT_QUIET_MS)) {
+    document.addEventListener(type, (event) => {
+      if (event.isTrusted && event.target !== host) quietUntil = Math.max(quietUntil, performance.now() + quietMs);
+    }, true);
+  }
   function startAmbient() {
     if (ambientObserver) return;
     ambientHistory = new WeakMap();
     ambientObserver = new MutationObserver((records) => {
-      // Changes that follow a click are the click's effects, not ambience.
-      if (stopWatching) return;
+      // Changes shortly after the user clicks, hovers, focuses, or types may
+      // be their doing (async results, hover styles), so they are marked as
+      // prompted. Ambience needs at least one change with no input nearby.
       const at = performance.now();
+      const prompted = at < quietUntil;
       for (const record of records) {
         const element = changedElement(record);
         if (!element || ownChange(record)) continue;
         const history = ambientHistory.get(element) ?? [];
-        if (history.at(-1) !== at) history.push(at);
-        ambientHistory.set(element, history.slice(-AMBIENT_CHANGES - 1));
+        if (history.at(-1)?.at !== at) history.push({ at, prompted });
+        // Keep what a click's watch can still ask about: the ambient window
+        // before it plus the watch after it. Changes after a click must not
+        // push out the ones before it.
+        ambientHistory.set(element, history.filter((entry) => entry.at >= at - AMBIENT_WINDOW_MS - WATCH_MS).slice(-32));
       }
     });
     ambientObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -354,8 +369,8 @@
   // click of a recording.
   startAmbient();
   function isAmbient(element, clickedAt) {
-    const recent = (ambientHistory.get(element) ?? []).filter((at) => at < clickedAt && at >= clickedAt - AMBIENT_WINDOW_MS);
-    return recent.length >= AMBIENT_CHANGES;
+    const recent = (ambientHistory.get(element) ?? []).filter(({ at }) => at < clickedAt && at >= clickedAt - AMBIENT_WINDOW_MS);
+    return recent.length >= AMBIENT_CHANGES && recent.some(({ prompted }) => !prompted);
   }
   function watchForChange() {
     stopWatch();
@@ -565,6 +580,10 @@
     return { scrollY: window.scrollY, masks: passwordMasks() };
   }
   function restoreCapture() {
+    const styled = [...(coveredFields ?? []).map(([element]) => element), ...(hiddenFixed ?? []).map(([element]) => element)];
+    // Forget these once the restore's own mutations have been delivered, so
+    // the page's later style changes on them count again.
+    setTimeout(() => { for (const element of styled) styledForCapture.delete(element); }, 0);
     uncoverPasswords();
     for (const [element, value, priority] of hiddenFixed ?? []) {
       if (value) element.style.setProperty("visibility", value, priority);
@@ -655,6 +674,8 @@
     if (savedRevision !== renameRevision || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
   });
   window.addEventListener("focus", () => { if (!root.hidden && !busy) void run({ action: "snapshot" }); });
+  // A hidden tab keeps ticking locally; refresh the real elapsed time on return.
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && !root.hidden && !busy) void run({ action: "snapshot" }); });
   const controller = {
     open() { root.hidden = false; void run({ action: "snapshot" }); },
     close() { root.hidden = true; },
