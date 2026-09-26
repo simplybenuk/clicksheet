@@ -138,3 +138,10 @@ input {
     padding: 48px 0;
   }
 }
+
+.fixture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}

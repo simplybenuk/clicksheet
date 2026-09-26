@@ -100,3 +100,77 @@ export function transitionJourney(journey, action, details = {}) {
   }
   return next;
 }
+
+export const FRAME_KIND = Object.freeze({
+  initial: "initial",
+  click: "click",
+  manual: "manual",
+  reentry: "reentry"
+});
+
+const FRAME_LABELS = Object.freeze({
+  initial: "Start",
+  click: "Page change",
+  manual: "Manual capture",
+  reentry: "Resumed"
+});
+
+// Export metadata must never carry query strings or fragments (FR-009.7).
+export function sanitizePathname(value) {
+  if (typeof value !== "string" || !value) return "/";
+  try {
+    return new URL(value, "http://clicksheet.invalid").pathname || "/";
+  } catch {
+    return value.split(/[?#]/)[0] || "/";
+  }
+}
+
+// A capture is metadata about already sanitized pixels; it never claims an
+// interaction target (manual frames must not, FR-007.3).
+export function buildFrame({ id, kind, page, image, capturedAt, segment = 0 }) {
+  if (!FRAME_LABELS[kind]) throw new TypeError(`Unknown frame kind: ${String(kind)}`);
+  const viewport = page?.viewport ?? {};
+  return {
+    id,
+    screenshotFile: `${id}.png`,
+    kind,
+    label: FRAME_LABELS[kind],
+    title: String(page?.title ?? "").slice(0, 300),
+    pathname: sanitizePathname(page?.pathname),
+    capturedAt,
+    segment,
+    image: { width: image.width, height: image.height },
+    viewport: {
+      width: finite(viewport.width, image.width),
+      height: finite(viewport.height, image.height),
+      scrollX: finite(viewport.scrollX, 0),
+      scrollY: finite(viewport.scrollY, 0),
+      devicePixelRatio: finite(viewport.devicePixelRatio, 1)
+    },
+    interaction: null
+  };
+}
+
+// Places a qualifying click on the frame that shows the page before it. The
+// click was measured against the live page, so it is shifted by any scroll
+// since that frame was captured. A frame of another page gets no marker.
+export function attachInteraction(frame, click) {
+  if (!frame || !click?.rect) return frame;
+  if (sanitizePathname(click.pathname) !== frame.pathname) return frame;
+  const dx = finite(click.scrollX, 0) - finite(frame.viewport?.scrollX, 0);
+  const dy = finite(click.scrollY, 0) - finite(frame.viewport?.scrollY, 0);
+  const rect = click.rect;
+  return {
+    ...frame,
+    interaction: {
+      type: "click",
+      label: String(click.label ?? "").trim().slice(0, 80),
+      rect: { x: finite(rect.x, 0) + dx, y: finite(rect.y, 0) + dy, width: Math.max(0, finite(rect.width, 0)), height: Math.max(0, finite(rect.height, 0)) },
+      point: click.point ? { x: finite(click.point.x, 0) + dx, y: finite(click.point.y, 0) + dy } : null
+    }
+  };
+}
+
+function finite(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}

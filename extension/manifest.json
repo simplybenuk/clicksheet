@@ -6,7 +6,8 @@
   "minimum_chrome_version": "120",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "action": {
     "default_title": "Open Clicksheet"

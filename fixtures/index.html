@@ -30,6 +30,19 @@
         <button type="button" data-action="load-details">Load details</button>
       </section>
 
+      <section class="fixture-card" id="navigation" aria-labelledby="navigation-title">
+        <div>
+          <p class="eyebrow">Capture qualification</p>
+          <h2 id="navigation-title">Navigation and no-op clicks</h2>
+          <p data-role="route" aria-live="polite">Route: overview</p>
+        </div>
+        <div class="fixture-actions">
+          <button type="button" data-action="noop">Does nothing</button>
+          <a href="/users" data-action="route">Show users</a>
+          <a href="/second.html" data-action="navigate">Open second page</a>
+        </div>
+      </section>
+
       <section class="fixture-card" id="settings" aria-labelledby="settings-title">
         <p class="eyebrow">Sensitive-field fixture</p>
         <h2 id="settings-title">Account settings</h2>
