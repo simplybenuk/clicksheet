@@ -152,7 +152,7 @@ To try it:
 2. Open `chrome://extensions`, turn on Developer mode, and load the `dist/` folder as an unpacked extension.
 3. Run `npm run fixture` and open the printed URL, or open any `http(s)` page.
 4. Click the Clicksheet icon. On the toolbar, choose **Storage** and pick a local folder for your Journeys.
-5. Create a Journey, press **Record**, and use the page. Clicks that change the page are captured automatically. **Capture** adds the current state at any time.
+5. Create a Journey, press **Record**, and use the page. Clicks that change the page are captured automatically. **Capture** adds the current state at any time. Press Alt+Shift+C instead to keep a hover or focus state that moving to the toolbar would end.
 6. Press **Stop**, tidy the screenshots (delete, reorder, **Redact…**), then use **Export** to copy or download the contact sheet.
 
 Run `npm test` for the syntax check, build, and unit tests.
