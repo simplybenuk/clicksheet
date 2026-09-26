@@ -504,3 +504,68 @@ test("a rename made after access is lost is held and saved on Reconnect", async 
   assert.equal(await journeyName(volume.root, journey.id), "Held");
   assert.equal(session.snapshot().hasUnsavedChanges, false);
 });
+
+test("a stale rename preserves frames and settings written by another context", async () => {
+  const { root } = createVolume();
+  const withLock = createMutex();
+  const rootStore = createRootStore();
+  const a = setup({ withLock, rootStore }).session;
+  const b = setup({ withLock, rootStore }).session;
+  await a.chooseRoot(root);
+  const journey = a.createJourney();
+  await a.flush();
+  await b.connect(root);
+  a.updateJourney(journey.id, { frames: [{ id: "f1", screenshotFile: "f1.png" }], settings: { captureArea: "full-page", captureDelayMs: 700 } });
+  await a.flush();
+  b.rename(journey.id, "From another tab");
+  await b.flush();
+  const saved = await createStorage(root).loadJourney(journey.id);
+  assert.equal(saved.name, "From another tab");
+  assert.equal(saved.frames.length, 1);
+  assert.equal(saved.settings.captureDelayMs, 700);
+});
+
+test("edits to non-name fields made during a save survive the write", async () => {
+  const { root } = createVolume();
+  let release;
+  let entered;
+  let hold = false;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutex = createMutex();
+  const session = setup({ withLock: (task) => mutex(async () => {
+    if (hold) { hold = false; entered(); await gate; }
+    return task();
+  }) }).session;
+  await session.chooseRoot(root);
+  const journey = session.createJourney();
+  await session.flush();
+  hold = true;
+  session.updateJourney(journey.id, { settings: { captureArea: "viewport", captureDelayMs: 600 } });
+  const saving = session.flush();
+  await waiting;
+  session.updateJourney(journey.id, { frames: [{ id: "f1" }], settings: { captureArea: "full-page", captureDelayMs: 800 } });
+  release();
+  await saving;
+  await session.flush();
+  const saved = await createStorage(root).loadJourney(journey.id);
+  assert.equal(saved.frames.length, 1);
+  assert.equal(saved.settings.captureDelayMs, 800);
+});
+
+test("pending model changes survive losing and reconnecting the folder", async () => {
+  const volume = createVolume();
+  const { session } = setup();
+  await session.chooseRoot(volume.root);
+  const journey = session.createJourney();
+  await session.flush();
+  volume.permission = "prompt";
+  await session.refreshAccess();
+  session.updateJourney(journey.id, { state: "Paused", pauseReason: "storage", frames: [{ id: "held" }] });
+  await session.flush();
+  volume.requestResult = "granted";
+  await session.reconnect();
+  const saved = await createStorage(volume.root).loadJourney(journey.id);
+  assert.equal(saved.state, "Paused");
+  assert.equal(saved.frames[0].id, "held");
+});

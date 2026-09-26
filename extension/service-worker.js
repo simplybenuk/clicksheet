@@ -1,3 +1,8 @@
+import { loadRootHandle, saveRootHandle } from "./core/handle-store.js";
+import { createJourneyCoordinator } from "./core/journey-coordinator.js";
+
+const journeys = createJourneyCoordinator({ loadRootHandle, saveRootHandle });
+
 import { classifyPage } from "./core/supported-pages.js";
 
 const TOOLBAR_SCRIPT = "content/toolbar.js";
@@ -40,11 +45,22 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type === "clicksheet:open-storage" && sender.id === chrome.runtime.id) {
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (sender.id !== chrome.runtime.id) return;
+  if (message?.type === "clicksheet:open-storage") {
     void chrome.runtime.openOptionsPage();
+    return;
+  }
+  if (message?.type === "clicksheet:journey" && Number.isInteger(sender.tab?.id)) {
+    journeys.request(sender.tab.id, message.command ?? {}).then(
+      (view) => respond({ ok: true, view }),
+      () => respond({ ok: false, error: "Clicksheet could not complete this action. Reconnect storage and try again." })
+    );
+    return true;
   }
 });
+
+chrome.tabs.onRemoved.addListener((tabId) => journeys.forgetTab(tabId));
 
 async function notifyTab(tabId, state) {
   try {

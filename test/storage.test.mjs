@@ -297,3 +297,14 @@ test("an index with malformed entries is rebuilt", async () => {
 
   assert.deepEqual((await storage.listJourneys()).map((entry) => entry.id), [journey.id]);
 });
+
+test("constant-clock saves still detect stale copies of a Journey", async () => {
+  const volume = createVolume();
+  const storage = createStorage(volume.root, { now: () => "2026-09-26T00:00:00.000Z", createId: () => "constant-clock" });
+  await storage.initialize();
+  const initial = await storage.createJourney();
+  const next = await storage.saveJourney({ ...initial, frames: [{ id: "frame-1" }] });
+  assert.notEqual(next.updatedAt, initial.updatedAt);
+  await assert.rejects(storage.saveJourney({ ...initial, name: "Stale rename" }), /changed on disk/);
+  assert.equal((await storage.loadJourney(initial.id)).frames.length, 1);
+});
