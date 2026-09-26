@@ -112,8 +112,21 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 // to the toolbar would end (FR-007.4). The shortcut also grants activeTab.
 chrome.commands.onCommand.addListener(captureFromShortcut);
 
+const shortcutCaptures = new Set();
+
 async function captureFromShortcut(command, tab) {
   if (command !== "capture" || typeof tab?.id !== "number") return;
+  // A held or repeated key press should not queue a burst of captures.
+  if (shortcutCaptures.has(tab.id)) return;
+  shortcutCaptures.add(tab.id);
+  try {
+    await runShortcutCapture(tab);
+  } finally {
+    shortcutCaptures.delete(tab.id);
+  }
+}
+
+async function runShortcutCapture(tab) {
   const page = classifyPage(tab.url);
   if (!page.supported) {
     await explainUnavailable(tab.id, page.reason);
@@ -131,6 +144,11 @@ async function captureFromShortcut(command, tab) {
   try {
     await journeys.request(tab.id, { action: "capture" }, { url: tab.url, windowId: tab.windowId });
     await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:refresh" }).catch(() => {});
+    // Visible confirmation even while the toolbar is hidden.
+    await chrome.action.setBadgeText({ tabId: tab.id, text: "✓" }).catch(() => {});
+    setTimeout(() => {
+      if (!explained.has(tab.id)) void chrome.action.setBadgeText({ tabId: tab.id, text: "" }).catch(() => {});
+    }, 1500);
   } catch (error) {
     await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:notice", text: userMessage(error) }).catch(() => {});
   }

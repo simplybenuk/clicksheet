@@ -87,6 +87,25 @@ async function hoverShortcut(t) {
   const frame = journey.frames[0];
   const colour = await s.pixel(journey.id, frame.screenshotFile, box.x + 4, box.y + box.height / 2);
   check("the shortcut keeps the hover state in the stored pixels", colour === "220,20,60" && frame.label === "Manual capture", `${colour} ${frame.label}`);
+  const badge = await worker.evaluate(async (url) => {
+    const [tab] = await chrome.tabs.query({ url: `${url}/*` });
+    return chrome.action.getBadgeText({ tabId: tab.id });
+  }, s.base);
+  check("a shortcut capture confirms itself on the action badge", badge === "✓", JSON.stringify(badge));
+  // Hidden toolbar plus a failing shortcut: the reason must still be shown.
+  await s.toolbar.locator('[data-action="dismiss"]').click();
+  await page.waitForTimeout(700);
+  await s.storagePage.evaluate(async () => {
+    const { saveRootHandle } = await import("/core/handle-store.js");
+    const root = await navigator.storage.getDirectory();
+    await saveRootHandle(await root.getDirectoryHandle("empty-library", { create: true }));
+  });
+  await worker.evaluate(async (url) => {
+    const [tab] = await chrome.tabs.query({ url: `${url}/*` });
+    await globalThis.__captureFromShortcut("capture", tab);
+  }, s.base);
+  const shown = await until(() => s.toolbar.isVisible(), Boolean, 3000);
+  check("a failed shortcut capture reopens the hidden toolbar with the reason", shown && /Journey/.test(await s.message()), await s.message());
 }
 
 // Full-page capture hides fixed elements; afterwards the page's own inline

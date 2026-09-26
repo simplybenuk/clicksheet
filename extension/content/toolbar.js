@@ -709,7 +709,9 @@
       return;
     }
     if (message?.type === "clicksheet:notice") {
+      // A failed shortcut capture must be visible even if the toolbar was hidden.
       notice = String(message.text ?? "");
+      root.hidden = false;
       render();
     }
     if (message?.type === "clicksheet:scroll-capture") {
