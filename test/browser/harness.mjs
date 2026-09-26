@@ -73,6 +73,9 @@ async function startFixture(port) {
   return server;
 }
 
+// Lets the request check see the extension worker's requests too.
+process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS ??= "1";
+
 // Test-only extension copy. Automation cannot click the toolbar icon, so the
 // copy gets broad host access and exposes the action handler to the worker;
 // the toolbar's closed shadow root is opened so locators can reach it.
@@ -84,7 +87,7 @@ function prepareExtension({ openShadow }) {
   writeFileSync(`${ext}/manifest.json`, JSON.stringify(manifest));
   const worker = readFileSync(`${ext}/service-worker.js`, "utf8");
   if (!worker.includes("function openClicksheet")) throw new Error("dist/service-worker.js no longer defines openClicksheet; update the harness");
-  writeFileSync(`${ext}/service-worker.js`, `${worker}\nglobalThis.__openClicksheet = openClicksheet;\n`);
+  writeFileSync(`${ext}/service-worker.js`, `${worker}\nglobalThis.__openClicksheet = openClicksheet;\nglobalThis.__captureFromShortcut = captureFromShortcut;\n`);
   if (openShadow) {
     const toolbar = readFileSync(`${ext}/content/toolbar.js`, "utf8");
     if (!toolbar.includes('mode: "closed"')) throw new Error("dist/content/toolbar.js no longer attaches a closed shadow root; update the harness");

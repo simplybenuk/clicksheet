@@ -145,3 +145,15 @@ input {
   gap: 12px;
   align-items: center;
 }
+
+/* Only visible while hovered: Manual Capture from the keyboard must keep it. */
+.hover-card {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #e2e8f0;
+}
+
+.hover-card:hover {
+  background: rgb(220, 20, 60);
+  color: white;
+}

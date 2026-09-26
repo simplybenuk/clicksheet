@@ -19,5 +19,13 @@
   "options_ui": {
     "page": "pages/storage.html",
     "open_in_tab": true
+  },
+  "commands": {
+    "capture": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Capture the current page into the open Journey"
+    }
   }
 }

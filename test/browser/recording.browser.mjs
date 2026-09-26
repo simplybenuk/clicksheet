@@ -5,6 +5,18 @@ export async function run(t) {
   const s = await t.launch({ windowSize: "1280,1300" });
   const { page, toolbar, frames } = s;
   const { check } = t;
+  // Captured data must stay local (FR-001.5): record every request the pages
+  // and the extension worker make while recording.
+  const external = [];
+  let seen = 0;
+  const watchRequest = (request) => {
+    seen += 1;
+    const url = new URL(request.url());
+    const local = ["127.0.0.1", "localhost"].includes(url.hostname) || ["chrome-extension:", "data:", "blob:", "chrome:", "about:"].includes(url.protocol);
+    if (!local) external.push(request.url());
+  };
+  s.context.on("request", watchRequest);
+  s.worker.on?.("request", watchRequest);
   await s.open();
   await s.newJourney();
   await toolbar.locator('[data-action="record"]').click();
@@ -54,5 +66,6 @@ export async function run(t) {
   check("screenshots are stored as PNG files", image.bytes > 1000 && image.dataUrl.startsWith("data:image/png"), `${image.width}x${image.height}`);
   check("toolbar is hidden in captured pixels", image.pixels[0] !== "27,30,38", `pixel=${image.pixels[0]}`);
   check("frame metadata has no query or hash", journey.frames.every((f) => !/[?#]/.test(f.pathname)), journey.frames.map((f) => f.pathname).join(" "));
+  check("no request left the machine while recording", seen > 0 && external.length === 0, `${seen} requests seen; external: ${external.slice(0, 3).join(" ") || "none"}`);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

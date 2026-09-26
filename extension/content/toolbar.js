@@ -57,7 +57,7 @@
           <button type="button" data-action="pause" hidden disabled>Pause</button>
           <button type="button" data-action="resume" hidden disabled>Resume</button>
           <button type="button" data-action="stop" hidden disabled>Stop</button>
-          <button type="button" data-action="capture" disabled>Capture</button>
+          <button type="button" data-action="capture" title="Capture the current page (Alt+Shift+C keeps hover and focus states)" disabled>Capture</button>
           <button type="button" data-action="export" aria-expanded="false" disabled>Export</button>
           <button type="button" data-action="settings" aria-expanded="false">Settings</button>
           <button type="button" data-action="storage">Storage</button>
@@ -358,6 +358,9 @@
         const element = changedElement(record);
         if (!element || ownChange(record)) continue;
         const history = ambientHistory.get(element) ?? [];
+        // A quiet gap longer than the window ends ambience: the element has
+        // stopped changing on its own.
+        if (history.length && at - history.at(-1).at > AMBIENT_WINDOW_MS) ambientSince.delete(element);
         if (history.at(-1)?.at !== at) history.push({ at, prompted });
         // Keep what a click's watch can still ask about: the ambient window
         // before it plus the watch after it. Changes after a click must not
@@ -377,7 +380,7 @@
   startAmbient();
   function isAmbient(element, clickedAt) {
     const recent = (ambientHistory.get(element) ?? []).filter(({ at }) => at < clickedAt && at >= clickedAt - AMBIENT_WINDOW_MS);
-    if (ambientSince.has(element) && ambientSince.get(element) < clickedAt && recent.length) return true;
+    if (ambientSince.has(element) && ambientSince.get(element) < clickedAt && recent.length >= AMBIENT_CHANGES) return true;
     return recent.length >= AMBIENT_CHANGES && recent.some(({ prompted }) => !prompted);
   }
   function watchForChange() {
@@ -700,6 +703,14 @@
     if (message?.type === "clicksheet:prepare-capture") {
       prepareCapture().then(respond, () => respond(null));
       return true;
+    }
+    if (message?.type === "clicksheet:ping") {
+      respond(true);
+      return;
+    }
+    if (message?.type === "clicksheet:notice") {
+      notice = String(message.text ?? "");
+      render();
     }
     if (message?.type === "clicksheet:scroll-capture") {
       scrollForCapture(message).then(respond, () => respond(null));

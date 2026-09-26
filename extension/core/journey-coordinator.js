@@ -154,7 +154,7 @@ export function createJourneyCoordinator({
     // A binding released by closing the tab keeps its time for a later Resume.
     const previous = memory.recording?.journeyId === journey.id ? memory.recording
       : memory.released?.journeyId === journey.id ? memory.released : null;
-    memory.released = null;
+    if (memory.released?.journeyId === journey.id) memory.released = null;
     memory.recording = {
       elapsedMs: newSegment ? 0 : previous?.elapsedMs ?? 0,
       activeSince: now(),
@@ -394,6 +394,13 @@ export function createJourneyCoordinator({
   async function execute(tabId, command, context) {
     const state = await remember();
     let { root, view } = await sync();
+    // A binding to a Journey that is not in the connected library (after
+    // "Start a new library" or Locate) would block every tab from recording.
+    if (view.available && state.recording && !find(view, state.recording.journeyId)) {
+      await unbind();
+      state.released = null;
+      await persist();
+    }
     if (root && ENDS_UNDO.has(command.action)) await endUndo(root);
     // An explicit id that no longer exists (folder removed by hand) must not
     // silently redirect a capture or edit into another Journey.

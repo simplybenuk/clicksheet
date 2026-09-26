@@ -142,10 +142,8 @@ elements.locate.addEventListener("click", runAction(withPickedDirectory(session.
 elements.startNew.addEventListener(
   "click",
   runAction(async () => {
-    const confirmed = window.confirm(
-      "Start a new, empty library in another folder?\n\nJourneys in the missing folder will no longer appear here. Changes held on this page for them will be discarded; new Journeys that were never saved move to the new folder. Nothing is deleted."
-    );
-    if (!confirmed) return;
+    // The picker needs the click's user activation, which a confirm dialog
+    // would use up, so the folder is picked first and the switch confirmed after.
     const directory = await pickDirectory();
     if (!directory) return;
     if (await containsLibrary(directory)) {
@@ -153,7 +151,10 @@ elements.startNew.addEventListener(
       elements.message.dataset.tone = "warn";
       return;
     }
-    await session.chooseRoot(directory);
+    const confirmed = window.confirm(
+      `Start a new, empty library in ${directory.name}?\n\nJourneys in the missing folder will no longer appear here. Changes held on this page for them will be discarded. Nothing is deleted.`
+    );
+    if (confirmed) await session.chooseRoot(directory);
   })
 );
 elements.move.addEventListener(

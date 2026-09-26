@@ -108,6 +108,34 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
 });
 
+// Manual Capture from the keyboard keeps hover and focus states that moving
+// to the toolbar would end (FR-007.4). The shortcut also grants activeTab.
+chrome.commands.onCommand.addListener(captureFromShortcut);
+
+async function captureFromShortcut(command, tab) {
+  if (command !== "capture" || typeof tab?.id !== "number") return;
+  const page = classifyPage(tab.url);
+  if (!page.supported) {
+    await explainUnavailable(tab.id, page.reason);
+    return;
+  }
+  const present = await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:ping" }).catch(() => false);
+  if (!present) {
+    try {
+      await injectToolbar(tab.id);
+    } catch {
+      await explainUnavailable(tab.id, "Clicksheet could not access this page. Try a standard web page.");
+      return;
+    }
+  }
+  try {
+    await journeys.request(tab.id, { action: "capture" }, { url: tab.url, windowId: tab.windowId });
+    await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:refresh" }).catch(() => {});
+  } catch (error) {
+    await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:notice", text: userMessage(error) }).catch(() => {});
+  }
+}
+
 chrome.tabs.onRemoved.addListener((tabId) => { void journeys.forgetTab(tabId); });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   void journeys.event(tabId, { type: "activated", windowId });

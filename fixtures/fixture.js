@@ -56,3 +56,14 @@ nextPage?.addEventListener("click", () => {
     nextPage.disabled = false;
   }, 120);
 });
+
+// A status line that updates itself a few times on load, then goes quiet.
+// A later click whose only effect is on this line must still be captured.
+const syncStatus = document.querySelector('[data-role="sync-status"]');
+// Only with ?sync, so other scenarios on this page are not disturbed.
+if (new URLSearchParams(location.search).has("sync")) {
+  [1, 2, 3].forEach((step) => window.setTimeout(() => { syncStatus.textContent = `Syncing ${step}/3…`; }, 2000 + step * 250));
+}
+document.querySelector('[data-action="refresh-status"]')?.addEventListener("click", () => {
+  syncStatus.textContent = `Refreshed at ${new Date().toLocaleTimeString()}`;
+});

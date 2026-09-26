@@ -5,6 +5,8 @@ import { until } from "./harness.mjs";
 export async function run(t) {
   await duringCaptureThenNavigate(t);
   await repeatedClicks(t);
+  await ambienceExpires(t);
+  await hoverShortcut(t);
   await fixedAfterFullPage(t);
   await elapsedTime(t);
 }
@@ -44,6 +46,47 @@ async function repeatedClicks(t) {
   await page.click('[data-action="noop"]');
   await page.waitForTimeout(2500);
   check("typing, then a no-op click beside the clock, gives no frame", await frames.count() === 6, `frames=${await frames.count()}`);
+}
+
+// A status line that updated itself three times and then went quiet must not
+// stay ambient: a later click whose only effect is on it still gives a frame.
+async function ambienceExpires(t) {
+  const s = await t.launch();
+  const { page, toolbar } = s;
+  const { check } = t;
+  await s.open("/?sync");
+  await s.newJourney();
+  await toolbar.locator('[data-action="record"]').click();
+  await s.count(1);
+  await page.waitForFunction(() => document.querySelector('[data-role="sync-status"]')?.textContent === "Syncing 3/3…");
+  await page.waitForTimeout(4000);
+  await page.click('[data-action="refresh-status"]');
+  await s.count(2);
+  await page.waitForTimeout(1200);
+  await page.click('[data-action="refresh-status"]');
+  check("a click on an element that stopped changing on its own gives a frame", await s.count(3, 5000), `frames=${await toolbar.locator(".clicksheet-toolbar__frame").count()}`);
+}
+
+// Manual Capture from the keyboard shortcut keeps a hover-only state, which
+// moving the pointer to the toolbar would end (FR-007.4).
+async function hoverShortcut(t) {
+  const s = await t.launch();
+  const { page, worker } = s;
+  const { check } = t;
+  await s.open();
+  await s.newJourney();
+  const card = page.locator('[data-role="hover-card"]');
+  await card.hover();
+  const box = await card.boundingBox();
+  await worker.evaluate(async (url) => {
+    const [tab] = await chrome.tabs.query({ url: `${url}/*` });
+    await globalThis.__captureFromShortcut("capture", tab);
+  }, s.base);
+  check("the capture shortcut adds a Manual capture frame", await s.count(1));
+  const journey = await s.readJourney();
+  const frame = journey.frames[0];
+  const colour = await s.pixel(journey.id, frame.screenshotFile, box.x + 4, box.y + box.height / 2);
+  check("the shortcut keeps the hover state in the stored pixels", colour === "220,20,60" && frame.label === "Manual capture", `${colour} ${frame.label}`);
 }
 
 // Full-page capture hides fixed elements; afterwards the page's own inline

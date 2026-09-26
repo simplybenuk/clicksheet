@@ -437,3 +437,13 @@ test("resuming after the recorded tab closed keeps the segment's elapsed time", 
   view = await coordinator.request(2, { action: "snapshot", journeyId: id });
   assert.equal(view.elapsedMs, 4000);
 });
+
+test("switching to a library without the bound Journey releases the recording binding", async () => {
+  const { coordinator, options, id } = await recording(1);
+  await coordinator.request(1, { action: "pause", journeyId: id });
+  const fresh = createVolume("fresh");
+  await options.saveRootHandle(fresh.root);
+  const view = await coordinator.request(2, { action: "new" });
+  assert.equal(view.recordingElsewhere, false);
+  assert.equal(view.controls.record, true);
+});
