@@ -35,6 +35,7 @@ export function createLibrarySession({
     moving: false,
     journeys: new Map(),
     dirty: new Set(),
+    patches: new Map(),
     // Journeys created in this session that have never been written.
     unsaved: new Set(),
     connectGeneration: 0,
@@ -104,41 +105,35 @@ export function createLibrarySession({
     };
   }
 
-  async function saveOne(storage, id) {
-    const journey = state.journeys.get(id);
-
+  async function saveOne(storage, id, journey, patch) {
     try {
       return await storage.saveJourney(journey);
     } catch (error) {
-      if (!(error instanceof JourneyConflictError)) {
-        throw error;
-      }
-
-      // Another context saved this Journey. Reapply this session's edit (the
-      // name) onto the newer file rather than overwriting it.
+      if (!(error instanceof JourneyConflictError)) throw error;
+      // Merge only the fields changed here. Never replace another context's
+      // frames or settings with an untouched stale copy.
       const latest = await storage.loadJourney(id);
-      return storage.saveJourney({ ...latest, name: journey.name });
+      return storage.saveJourney({ ...latest, ...patch });
     }
   }
 
   async function saveDirtyJourneys() {
     const storage = state.storage;
-
-    // Hold edits in memory rather than writing while access is known to be lost.
-    if (!storage || !state.available) {
-      throw new Error("No storage folder is connected.");
-    }
+    if (!storage || !state.available) throw new Error("No storage folder is connected.");
 
     for (const id of [...state.dirty]) {
+      const journey = state.journeys.get(id);
+      const patch = state.patches.get(id) ?? {};
       state.dirty.delete(id);
-
+      state.patches.delete(id);
       try {
-        const saved = await saveOne(storage, id);
+        const saved = await saveOne(storage, id, journey, patch);
         state.unsaved.delete(id);
-        // Keep any name typed while the save was in flight.
-        state.journeys.set(id, { ...saved, name: state.journeys.get(id).name });
+        // Preserve every field edited while this write was in flight.
+        state.journeys.set(id, { ...saved, ...(state.patches.get(id) ?? {}) });
       } catch (error) {
         state.dirty.add(id);
+        state.patches.set(id, { ...patch, ...(state.patches.get(id) ?? {}) });
         throw error;
       }
     }
@@ -225,11 +220,12 @@ export function createLibrarySession({
 
     for (const id of [...state.dirty]) {
       if (journeys.has(id) || carryPending || state.unsaved.has(id)) {
-        journeys.set(id, { ...(journeys.get(id) ?? state.journeys.get(id)), name: state.journeys.get(id).name });
+        journeys.set(id, { ...(journeys.get(id) ?? state.journeys.get(id)), ...(state.patches.get(id) ?? {}) });
       } else {
         // An edit to a Journey that is not in this folder cannot be applied
         // here, and writing it would add data to a library the user did not pick.
         state.dirty.delete(id);
+        state.patches.delete(id);
         dropped += 1;
       }
     }
@@ -289,6 +285,7 @@ export function createLibrarySession({
   function edit(id, change) {
     state.journeys.set(id, { ...state.journeys.get(id), ...change });
     state.dirty.add(id);
+    state.patches.set(id, { ...(state.patches.get(id) ?? {}), ...change });
     autosave.schedule();
     notify();
   }
@@ -406,6 +403,17 @@ export function createLibrarySession({
       state.unsaved.add(journey.id);
       edit(journey.id, {});
       return journey;
+    },
+
+    // Apply a bounded set of editable fields; identity and storage revisions
+    // are always owned by the storage adapter.
+    updateJourney(id, change) {
+      if (!state.journeys.has(id)) throw new Error("Journey not found.");
+      const allowed = new Set(["name", "frames", "settings", "state", "pauseReason", "recordingSegment"]);
+      if (Object.keys(change).some((key) => !allowed.has(key))) {
+        throw new TypeError("This Journey field cannot be edited.");
+      }
+      edit(id, structuredClone(change));
     },
 
     rename(id, name) {

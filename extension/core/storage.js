@@ -304,7 +304,12 @@ export function createStorage(
       format: JOURNEY_FORMAT,
       version: FORMAT_VERSION,
       name: normalizeName(journey.name),
-      updatedAt: now()
+      // A millisecond timestamp is also the optimistic concurrency token.
+      // Ensure successive saves cannot reuse it, even with a fixed clock.
+      updatedAt: new Date(Math.max(
+        Date.parse(now()),
+        Number.isFinite(Date.parse(current?.updatedAt)) ? Date.parse(current.updatedAt) + 1 : 0
+      )).toISOString()
     };
 
     await directory.getDirectoryHandle(SCREENSHOTS_DIRECTORY, { create: true });
