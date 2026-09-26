@@ -37,3 +37,8 @@ reveal?.addEventListener("click", () => {
   password.type = password.type === "password" ? "text" : "password";
   reveal.textContent = password.type === "password" ? "Show password" : "Hide password";
 });
+
+// Ambient change: a ticking clock must not turn no-op clicks into frames.
+const clock = document.querySelector('[data-role="clock"]');
+let ticks = 0;
+if (clock) window.setInterval(() => { clock.textContent = String(++ticks); }, 400);

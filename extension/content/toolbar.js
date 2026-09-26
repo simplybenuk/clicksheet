@@ -305,14 +305,47 @@
     const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
     return Boolean(element?.isConnected && element.getClientRects().length);
   }
+  // Clocks, tickers, and animations change constantly. An element that
+  // changed at least three times in the three seconds before a click is
+  // ambient, and its later changes do not qualify that click.
+  const AMBIENT_WINDOW_MS = 3000;
+  const AMBIENT_CHANGES = 3;
+  let ambientObserver = null;
+  let ambientHistory = new WeakMap();
+  const changedElement = (record) => record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement;
+  function startAmbient() {
+    if (ambientObserver) return;
+    ambientHistory = new WeakMap();
+    ambientObserver = new MutationObserver((records) => {
+      // Changes that follow a click are the click's effects, not ambience.
+      if (preparingCapture || stopWatching) return;
+      const at = performance.now();
+      for (const record of records) {
+        const element = changedElement(record);
+        if (!element) continue;
+        const history = ambientHistory.get(element) ?? [];
+        if (history.at(-1) !== at) history.push(at);
+        ambientHistory.set(element, history.slice(-AMBIENT_CHANGES - 1));
+      }
+    });
+    ambientObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  }
+  // Watched from injection, so ambient changes are known before the first
+  // click of a recording.
+  startAmbient();
+  function isAmbient(element, clickedAt) {
+    const recent = (ambientHistory.get(element) ?? []).filter((at) => at < clickedAt && at >= clickedAt - AMBIENT_WINDOW_MS);
+    return recent.length >= AMBIENT_CHANGES;
+  }
   function watchForChange() {
     stopWatch();
+    const clickedAt = performance.now();
     const href = location.href;
     const changed = () => { stopWatch(); sendEvent({ type: "changed" }); };
     const mutations = new MutationObserver((records) => {
       // Covering passwords or hiding fixed elements for a capture is not a
       // page change caused by the user's click.
-      if (!preparingCapture && records.some((record) => record.target !== host && rendered(record.target))) changed();
+      if (!preparingCapture && records.some((record) => record.target !== host && rendered(record.target) && !isAmbient(changedElement(record), clickedAt))) changed();
     });
     mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
     // pushState fires no event, so the URL is also polled briefly.
