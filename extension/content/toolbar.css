@@ -46,3 +46,5 @@
 #clicksheet-toolbar-root .clicksheet-toolbar__menu select { background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px; font: inherit; }
 #clicksheet-toolbar-root .clicksheet-toolbar__menu p { margin: 0; color: #b6c6dd; font-size: 11px; }
 #clicksheet-toolbar-root .clicksheet-toolbar__frame[draggable="true"] { cursor: grab; }
+#clicksheet-toolbar-root [data-role="elapsed"] { font-variant-numeric: tabular-nums; color: #eef3ff; margin-right: 12px; }
+#clicksheet-toolbar-root [data-role="elapsed"]:empty { display: none; }

@@ -389,3 +389,38 @@ test("loading in another tab never marks the recorded tab as navigating", async 
   const view = await coordinator.request(1, { action: "snapshot", journeyId: id });
   assert.equal(view.currentJourney.pauseReason, "permission");
 });
+
+test("elapsed recording time excludes pauses and restarts with a new segment", async () => {
+  const { coordinator, time, id, context } = await recording();
+  await time.advance(5000);
+  let view = await coordinator.request(1, { action: "pause", journeyId: id });
+  assert.equal(view.elapsedMs, 5000);
+  await time.advance(60000);
+  view = await coordinator.request(1, { action: "resume", journeyId: id }, context);
+  await time.advance(2000);
+  view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.elapsedMs, 7000);
+  await coordinator.request(1, { action: "stop", journeyId: id });
+  await time.advance(700);
+  view = await coordinator.request(1, { action: "record", journeyId: id }, context);
+  assert.equal(view.elapsedMs, 0);
+});
+
+test("a navigation that both starts and completes during a capture is not lost access", async () => {
+  const { coordinator, time, browser, id } = await recording();
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  const prepare = browser.prepare;
+  browser.prepare = async () => {
+    void coordinator.event(1, { type: "updated", status: "loading" });
+    void coordinator.event(1, { type: "updated", status: "complete", url: `${ORIGIN}/users` });
+    throw new Error("Could not establish connection. Receiving end does not exist.");
+  };
+  await time.advance(500);
+  browser.prepare = prepare;
+  browser.page.pathname = "/users";
+  await time.advance(700);
+  const view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.state, "Recording");
+  assert.equal(view.currentJourney.frames.at(-1).pathname, "/users");
+});

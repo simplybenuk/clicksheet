@@ -104,7 +104,21 @@ export function createJourneyCoordinator({
     return view.journeys.find((journey) => journey.id === id) ?? null;
   }
 
+  // Elapsed recording time for the bound segment, excluding pauses.
+  function trackElapsed(journey) {
+    const bound = memory?.recording;
+    if (!bound || bound.journeyId !== journey.id) return;
+    const running = journey.state === JOURNEY_STATE.recording;
+    if (running && bound.activeSince == null) bound.activeSince = now();
+    if (!running && bound.activeSince != null) {
+      bound.elapsedMs = (bound.elapsedMs ?? 0) + Math.max(0, now() - bound.activeSince);
+      bound.activeSince = null;
+    }
+    void persist();
+  }
+
   function writeState(journey, frames = journey.frames) {
+    trackElapsed(journey);
     session.updateJourney(journey.id, {
       frames,
       state: journey.state,
@@ -135,9 +149,12 @@ export function createJourneyCoordinator({
     void browser?.notify?.(tabId)?.catch?.(() => {});
   }
 
-  async function bind(journey, tabId, context) {
+  async function bind(journey, tabId, context, { newSegment = false } = {}) {
     navigating.delete(tabId);
+    const previous = memory.recording?.journeyId === journey.id ? memory.recording : null;
     memory.recording = {
+      elapsedMs: newSegment ? 0 : previous?.elapsedMs ?? 0,
+      activeSince: now(),
       journeyId: journey.id,
       tabId,
       windowId: context.windowId ?? null,
@@ -425,7 +442,7 @@ export function createJourneyCoordinator({
         const next = transitionJourney(current, "record", details);
         const captured = await capturePage(tabId, FRAME_KIND.initial, next);
         await addFrame(root, current, captured, { next });
-        await bind(next, tabId, context);
+        await bind(next, tabId, context, { newSegment: true });
         startScheduler(state.recording.delayMs);
         break;
       }
@@ -601,6 +618,9 @@ export function createJourneyCoordinator({
       controls: selected ? libraryControls(journeyControls(prepareJourney(selected), { available: view.editable, captureReady }), selected, tabId, view) : {},
       recordingHere: state.recording?.tabId === tabId && state.recording.journeyId === selected?.id,
       recordingElsewhere: Boolean(state.recording && state.recording.tabId !== tabId),
+      elapsedMs: selected && state.recording?.journeyId === selected.id
+        ? (state.recording.elapsedMs ?? 0) + (state.recording.activeSince != null ? Math.max(0, now() - state.recording.activeSince) : 0)
+        : null,
       canExport: Boolean(selected?.frames.length && view.available),
       undo: state.undo && state.undo.journeyId === selected?.id ? { frameId: state.undo.frame.id } : null,
       notice,
@@ -723,10 +743,10 @@ export function createJourneyCoordinator({
     event(tabId, event) {
       // Navigation state is recorded at once: a capture already queued or in
       // flight must see it, not wait behind it.
-      // Only the recorded tab matters, and completion always clears it, so a
-      // page that loaded before Record can never hide later capture failures.
+      // Only the recorded tab is marked, and binding clears it, so a page that
+      // loaded before Record can never hide later capture failures. Completion
+      // is handled in the queue, after any capture it interrupted.
       if (event?.type === "updated" && event.status === "loading" && memory?.recording?.tabId === tabId) navigating.add(tabId);
-      if (event?.type === "updated" && event.status === "complete") navigating.delete(tabId);
       if (event?.type === "removed") navigating.delete(tabId);
       return enqueue(() => handleEvent(tabId, event ?? {}));
     },

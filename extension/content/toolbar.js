@@ -51,7 +51,7 @@
         </div>
       </div>
       <div class="clicksheet-toolbar__controls">
-        <div><span data-role="state">Ready</span><span data-role="save-status" aria-live="polite"></span></div>
+        <div><span data-role="state">Ready</span><span data-role="elapsed" aria-label="Recording time"></span><span data-role="save-status" aria-live="polite"></span></div>
         <div class="clicksheet-toolbar__actions">
           <button type="button" data-action="record" disabled>Record</button>
           <button type="button" data-action="pause" hidden disabled>Pause</button>
@@ -99,7 +99,12 @@
   let requestTail = Promise.resolve();
   let stopWatching = null;
   let hiddenForCapture = null;
-  let preparingCapture = false;
+  // Elements whose inline style Clicksheet changes during a capture (covered
+  // password fields, hidden fixed elements). Only those style changes are
+  // ignored, so a real click during a capture still counts.
+  const styledForCapture = new WeakSet();
+  const ownChange = (record) => record.target === host ||
+    (record.type === "attributes" && record.attributeName === "style" && styledForCapture.has(record.target));
   let scrollBeforeCapture = null;
   let hiddenFixed = null;
   let draggedFrame = null;
@@ -157,6 +162,7 @@
     if (shadow.activeElement !== role("name") && savedRevision === renameRevision) role("name").value = journey?.name ?? "";
     role("name").disabled = busy || !journey || !view?.renamable;
     role("state").textContent = journey?.state ?? "Ready";
+    renderElapsed();
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < renameRevision ? "Saving" : view?.status ?? "";
     role("message").textContent = notice || view?.message?.text || statusMessage(journey);
     action("new").disabled = busy || !view?.editable || (journey && !controls.newJourney);
@@ -236,12 +242,26 @@
     if (!observing()) stopWatch();
   }
 
+  // The worker reports elapsed time with each view; the toolbar ticks locally
+  // between views while Recording.
+  let elapsedBase = null;
+  let elapsedAt = 0;
+  function renderElapsed() {
+    const state = view?.currentJourney?.state;
+    if (elapsedBase === null || !["Recording", "Paused"].includes(state)) { role("elapsed").textContent = ""; return; }
+    const total = Math.floor((elapsedBase + (state === "Recording" ? performance.now() - elapsedAt : 0)) / 1000);
+    const pad = (value) => String(value).padStart(2, "0");
+    role("elapsed").textContent = `${total >= 3600 ? `${Math.floor(total / 3600)}:` : ""}${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+  }
+  setInterval(() => { if (!root.hidden && view?.currentJourney?.state === "Recording") renderElapsed(); }, 1000);
   function request(command) {
     command = { journeyId: view?.currentJourney?.id, ...command };
     const pending = requestTail.then(async () => {
       const result = await chrome.runtime.sendMessage({ type: "clicksheet:journey", command });
       if (!result?.ok) throw new Error(result?.error || "Reload the extension and reopen Clicksheet.");
       view = result.view;
+      elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
+      elapsedAt = performance.now();
       if (view.notice) notice = view.notice;
       return view;
     });
@@ -318,11 +338,11 @@
     ambientHistory = new WeakMap();
     ambientObserver = new MutationObserver((records) => {
       // Changes that follow a click are the click's effects, not ambience.
-      if (preparingCapture || stopWatching) return;
+      if (stopWatching) return;
       const at = performance.now();
       for (const record of records) {
         const element = changedElement(record);
-        if (!element) continue;
+        if (!element || ownChange(record)) continue;
         const history = ambientHistory.get(element) ?? [];
         if (history.at(-1) !== at) history.push(at);
         ambientHistory.set(element, history.slice(-AMBIENT_CHANGES - 1));
@@ -343,9 +363,7 @@
     const href = location.href;
     const changed = () => { stopWatch(); sendEvent({ type: "changed" }); };
     const mutations = new MutationObserver((records) => {
-      // Covering passwords or hiding fixed elements for a capture is not a
-      // page change caused by the user's click.
-      if (!preparingCapture && records.some((record) => record.target !== host && rendered(record.target) && !isAmbient(changedElement(record), clickedAt))) changed();
+      if (records.some((record) => !ownChange(record) && rendered(record.target) && !isAmbient(changedElement(record), clickedAt))) changed();
     });
     mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
     // pushState fires no event, so the URL is also polled briefly.
@@ -469,15 +487,15 @@
     for (const { doc, x, y } of frameDocuments()) {
       for (const element of doc.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x, y });
     }
-    // Open shadow roots in the top document.
-    const visit = (scope) => {
+    // Open shadow roots, in the top document and in same-origin frames.
+    const visit = (scope, x, y) => {
       for (const child of scope.querySelectorAll("*")) {
         if (!child.shadowRoot || child === host) continue;
-        for (const element of child.shadowRoot.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x: 0, y: 0 });
-        visit(child.shadowRoot);
+        for (const element of child.shadowRoot.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x, y });
+        visit(child.shadowRoot, x, y);
       }
     };
-    visit(document);
+    for (const { doc, x, y } of frameDocuments()) visit(doc, x, y);
     return fields;
   }
   function passwordMasks() {
@@ -493,6 +511,7 @@
     if (coveredFields) return;
     coveredFields = passwordFields().map(({ element }) => {
       const saved = COVER.map(([name]) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+      styledForCapture.add(element);
       for (const [name, value] of COVER) element.style.setProperty(name, value, "important");
       return [element, saved];
     });
@@ -513,7 +532,6 @@
     });
   }
   async function prepareCapture() {
-    preparingCapture = true;
     if (hiddenForCapture === null) hiddenForCapture = root.hidden;
     root.hidden = true;
     coverPasswords();
@@ -538,6 +556,7 @@
         const position = getComputedStyle(element).position;
         if (position !== "fixed" && position !== "sticky") continue;
         hiddenFixed.push([element, element.style.getPropertyValue("visibility"), element.style.getPropertyPriority("visibility")]);
+        styledForCapture.add(element);
         element.style.setProperty("visibility", "hidden", "important");
       }
     }
@@ -547,9 +566,6 @@
   }
   function restoreCapture() {
     uncoverPasswords();
-    // Style restores are delivered to observers after this task; clear the
-    // flag once they have been seen.
-    setTimeout(() => { preparingCapture = false; }, 0);
     for (const [element, value, priority] of hiddenFixed ?? []) {
       if (value) element.style.setProperty("visibility", value, priority);
       else element.style.removeProperty("visibility");
