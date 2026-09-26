@@ -157,6 +157,8 @@ To try it:
 
 Run `npm test` for the syntax check, build, and unit tests.
 
+The optional browser suite, `npm run test:browser`, needs playwright-core and a Chromium build (set `CLICKSHEET_PLAYWRIGHT` and `CLICKSHEET_CHROMIUM` if Node cannot find them). It loads a test-only copy of the extension with broad host access, because automation cannot click the toolbar icon.
+
 Issues, ideas and contributions are welcome.
 
 ## Licence
