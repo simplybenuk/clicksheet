@@ -9,6 +9,8 @@
 //   journeys/<journey-id>/screenshots/<frame>.png
 //   journeys/<journey-id>/exports/
 
+import { nextExportName, slugifyJourneyName } from "./export-names.js";
+
 export const INDEX_FILE = "index.json";
 export const JOURNEYS_DIRECTORY = "journeys";
 export const JOURNEY_FILE = "journey.json";
@@ -144,6 +146,11 @@ export function createStorage(
     assertId(id);
     const journeys = await journeysDirectory();
     return journeys.getDirectoryHandle(id, { create });
+  }
+
+  async function exportsDirectory(journeyId) {
+    const directory = await journeyDirectory(journeyId);
+    return directory.getDirectoryHandle(EXPORTS_DIRECTORY, { create: true });
   }
 
   async function writeIndex(journeys) {
@@ -365,6 +372,36 @@ export function createStorage(
       await writeFile(screenshots, fileName, data);
     },
 
+    // Exports are never overwritten: the name is chosen and written inside the
+    // storage lock so concurrent exports cannot pick the same free name.
+    writeExport(journeyId, journeyName, data) {
+      return serialize(async () => {
+        const exports = await exportsDirectory(journeyId);
+        const taken = [];
+
+        // Any entry, including a folder, would block the name.
+        for await (const name of exports.keys()) {
+          taken.push(name);
+        }
+
+        const fileName = nextExportName(slugifyJourneyName(journeyName), taken);
+
+        try {
+          await writeFile(exports, fileName, data);
+        } catch (error) {
+          // The name was free, so the empty file left by a failed write is ours.
+          await exports.removeEntry(fileName).catch(() => {});
+          throw error;
+        }
+
+        return { fileName };
+      });
+    },
+
+    async listExports(journeyId) {
+      return (await fileNames(await exportsDirectory(journeyId))).sort();
+    },
+
     async readScreenshot(journeyId, fileName) {
       assertScreenshotName(fileName);
       const directory = await journeyDirectory(journeyId);
@@ -511,6 +548,18 @@ async function hasEntry(directory, name) {
   }
 
   return false;
+}
+
+async function fileNames(directory) {
+  const names = [];
+
+  for await (const [name, handle] of directory.entries()) {
+    if (handle.kind === "file") {
+      names.push(name);
+    }
+  }
+
+  return names;
 }
 
 async function readJson(directory, name) {
