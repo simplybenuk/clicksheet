@@ -85,7 +85,7 @@ export function createJourneyCoordinator({
   async function remember() {
     if (!memory) {
       const stored = await bindings.load().catch(() => null);
-      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null };
+      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null, lastCaptured: stored?.lastCaptured ?? null };
     }
     return memory;
   }
@@ -136,6 +136,7 @@ export function createJourneyCoordinator({
   }
 
   async function bind(journey, tabId, context) {
+    navigating.delete(tabId);
     memory.recording = {
       journeyId: journey.id,
       tabId,
@@ -261,10 +262,19 @@ export function createJourneyCoordinator({
       throw new CaptureError("The screenshot could not be saved. Reconnect storage to keep capturing.", { pauseReason: "storage", cause: error });
     }
     const frames = [...journey.frames];
-    if (click && frames.length) frames[frames.length - 1] = attachInteraction(frames.at(-1), click);
+    // The click happened on the most recently captured page state, which is
+    // not the last strip position after a reorder. If that frame was deleted,
+    // no other frame can honestly carry the marker.
+    const preceding = memory.lastCaptured?.journeyId === journey.id
+      ? frames.findIndex((frame) => frame.id === memory.lastCaptured.frameId)
+      : frames.length - 1;
+    if (click && preceding !== -1) frames[preceding] = attachInteraction(frames[preceding], click);
     frames.push(captured.frame);
     writeState(next, frames);
-    if (!(await session.flush())) {
+    const saved = await session.flush();
+    memory.lastCaptured = { journeyId: journey.id, frameId: captured.frame.id };
+    await persist();
+    if (!saved) {
       throw new CaptureError("The Journey could not be saved. It is held here until storage is reconnected.", { pauseReason: "storage" });
     }
   }
@@ -363,7 +373,7 @@ export function createJourneyCoordinator({
     // An explicit id that no longer exists (folder removed by hand) must not
     // silently redirect a capture or edit into another Journey.
     if (command.journeyId && !find(view, command.journeyId) && !["snapshot", "open", "new"].includes(command.action)) {
-      throw new Error("Journey not found. Reopen it from Journeys.");
+      throw new Error(view.available ? "Journey not found. Reopen it from Journeys." : "Reconnect the storage folder on the Storage page, then try again.");
     }
     let id = command.journeyId ?? state.selections[tabId];
     if (!find(view, id)) id = view.journeys[0]?.id ?? null;
@@ -713,10 +723,15 @@ export function createJourneyCoordinator({
     event(tabId, event) {
       // Navigation state is recorded at once: a capture already queued or in
       // flight must see it, not wait behind it.
-      if (event?.type === "updated" && event.status === "loading") navigating.add(tabId);
+      // Only the recorded tab matters, and completion always clears it, so a
+      // page that loaded before Record can never hide later capture failures.
+      if (event?.type === "updated" && event.status === "loading" && memory?.recording?.tabId === tabId) navigating.add(tabId);
+      if (event?.type === "updated" && event.status === "complete") navigating.delete(tabId);
+      if (event?.type === "removed") navigating.delete(tabId);
       return enqueue(() => handleEvent(tabId, event ?? {}));
     },
     forgetTab(tabId) {
+      navigating.delete(tabId);
       return enqueue(async () => {
         await handleEvent(tabId, { type: "removed" });
         delete (await remember()).selections[tabId];

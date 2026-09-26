@@ -99,6 +99,7 @@
   let requestTail = Promise.resolve();
   let stopWatching = null;
   let hiddenForCapture = null;
+  let preparingCapture = false;
   let scrollBeforeCapture = null;
   let hiddenFixed = null;
   let draggedFrame = null;
@@ -309,7 +310,9 @@
     const href = location.href;
     const changed = () => { stopWatch(); sendEvent({ type: "changed" }); };
     const mutations = new MutationObserver((records) => {
-      if (records.some((record) => record.target !== host && rendered(record.target))) changed();
+      // Covering passwords or hiding fixed elements for a capture is not a
+      // page change caused by the user's click.
+      if (!preparingCapture && records.some((record) => record.target !== host && rendered(record.target))) changed();
     });
     mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
     // pushState fires no event, so the URL is also polled briefly.
@@ -366,22 +369,51 @@
   // field revealed by a "show password" toggle before any capture is still
   // treated as a password.
   function trackPassword(element) {
-    if (element instanceof HTMLInputElement && element.matches(PASSWORD_SELECTOR)) seenPasswords.add(element);
+    // Frames have their own HTMLInputElement, so test by name, not instanceof.
+    if (element?.localName === "input" && element.matches(PASSWORD_SELECTOR)) seenPasswords.add(element);
+  }
+  // Each reachable scope (the document, same-origin frame documents, and open
+  // shadow roots) gets its own watcher: mutations and composed events do not
+  // reveal what happens inside them from the outside.
+  const watchedScopes = new WeakSet();
+  const fromEvent = (event) => trackPassword(event.composedPath?.()[0] ?? event.target);
+  function watchScope(scope) {
+    if (!scope || watchedScopes.has(scope) || scope === shadow) return;
+    watchedScopes.add(scope);
+    const target = scope.documentElement ?? scope;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "attributes" && record.oldValue === "password") seenPasswords.add(record.target);
+        else if (record.type === "attributes") trackPassword(record.target);
+        for (const node of record.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          trackPassword(node);
+          // A component attaches its shadow root on insertion and often fills
+          // it later; watching the root catches the field when it appears.
+          if (node.shadowRoot && node !== host) { watchScope(node.shadowRoot); scanPasswords(node.shadowRoot); }
+          if (node.localName === "iframe" || node.localName === "frame") scanFrame(node);
+          scanPasswords(node);
+        }
+      }
+    }).observe(target, { subtree: true, childList: true, attributes: true, attributeFilter: ["type", "autocomplete"], attributeOldValue: true });
+    for (const type of ["focusin", "input", "click"]) scope.addEventListener(type, fromEvent, true);
+    // Frames that load later are watched as soon as they load.
+    scope.addEventListener("load", (event) => { if (event.target?.localName === "iframe" || event.target?.localName === "frame") scanFrame(event.target); }, true);
+  }
+  function scanFrame(frame) {
+    let doc = null;
+    try { doc = frame.contentDocument; } catch { doc = null; }
+    if (doc?.documentElement) { watchScope(doc); scanPasswords(doc); }
   }
   function scanPasswords(scope) {
     for (const element of scope.querySelectorAll?.(PASSWORD_SELECTOR) ?? []) seenPasswords.add(element);
-    for (const child of scope.querySelectorAll?.("*") ?? []) if (child.shadowRoot) scanPasswords(child.shadowRoot);
-  }
-  scanPasswords(document);
-  new MutationObserver((records) => {
-    for (const record of records) {
-      if (record.type === "attributes" && record.oldValue === "password") seenPasswords.add(record.target);
-      else if (record.type === "attributes") trackPassword(record.target);
-      for (const node of record.addedNodes) if (node.nodeType === Node.ELEMENT_NODE) { trackPassword(node); scanPasswords(node); }
+    for (const child of scope.querySelectorAll?.("*") ?? []) {
+      if (child.shadowRoot && child !== host) { watchScope(child.shadowRoot); scanPasswords(child.shadowRoot); }
+      if (child.localName === "iframe" || child.localName === "frame") scanFrame(child);
     }
-  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["type", "autocomplete"], attributeOldValue: true });
-  document.addEventListener("focusin", (event) => trackPassword(event.target), true);
-  document.addEventListener("input", (event) => trackPassword(event.target), true);
+  }
+  watchScope(document);
+  scanPasswords(document);
 
   // Same-origin frames are searched too; their fields are offset by the
   // frame's position. Cross-origin frames cannot be inspected.
@@ -399,9 +431,9 @@
     return found;
   }
   function passwordFields() {
+    scanPasswords(document);
     const fields = [];
     for (const { doc, x, y } of frameDocuments()) {
-      if (doc !== document) scanPasswords(doc);
       for (const element of doc.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x, y });
     }
     // Open shadow roots in the top document.
@@ -448,6 +480,7 @@
     });
   }
   async function prepareCapture() {
+    preparingCapture = true;
     if (hiddenForCapture === null) hiddenForCapture = root.hidden;
     root.hidden = true;
     coverPasswords();
@@ -481,6 +514,9 @@
   }
   function restoreCapture() {
     uncoverPasswords();
+    // Style restores are delivered to observers after this task; clear the
+    // flag once they have been seen.
+    setTimeout(() => { preparingCapture = false; }, 0);
     for (const [element, value, priority] of hiddenFixed ?? []) {
       if (value) element.style.setProperty("visibility", value, priority);
       else element.style.removeProperty("visibility");

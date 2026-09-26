@@ -333,3 +333,59 @@ test("an explicit Journey id that no longer exists is refused rather than redire
   const { coordinator, context } = await recording();
   await assert.rejects(coordinator.request(1, { action: "capture", journeyId: "gone" }, context), /Journey not found/);
 });
+
+test("after a reorder the marker goes on the most recently captured frame", async () => {
+  const { coordinator, time, browser, id, context } = await recording();
+  browser.page.pathname = "/dashboard";
+  await time.advance(700);
+  let view = await coordinator.request(1, { action: "capture", journeyId: id }, context);
+  const [first, second] = view.currentJourney.frames;
+  await coordinator.request(1, { action: "move-frame", journeyId: id, frameId: second.id, toIndex: 0 });
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  await time.advance(700);
+  view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  const byId = Object.fromEntries(view.currentJourney.frames.map((frame) => [frame.id, frame]));
+  assert.equal(byId[second.id].interaction?.label, "Save");
+  assert.equal(byId[first.id].interaction, null);
+});
+
+test("no marker is placed when the preceding frame was deleted", async () => {
+  const { coordinator, time, id } = await recording();
+  let view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  await coordinator.request(1, { action: "delete-frame", journeyId: id, frameId: view.currentJourney.frames[0].id });
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  await time.advance(700);
+  view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.frames.length, 1);
+  assert.equal(view.currentJourney.frames[0].interaction, null);
+});
+
+test("a page that loaded before Record still pauses visibly on a capture failure", async () => {
+  const env = setup();
+  await env.coordinator.event(1, { type: "updated", status: "loading" });
+  await env.coordinator.event(1, { type: "updated", status: "complete", url: `${ORIGIN}/dashboard` });
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "record", journeyId: id }, env.context);
+  env.volume.failWritesMatching = /\.png$/;
+  await env.coordinator.event(1, click("Save"));
+  await env.coordinator.event(1, { type: "changed" });
+  await env.time.advance(700);
+  env.volume.failWritesMatching = null;
+  const view = await env.coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.pauseReason, "storage");
+  assert.match(view.notice, /could not be saved/);
+});
+
+test("loading in another tab never marks the recorded tab as navigating", async () => {
+  const { coordinator, time, browser, id } = await recording();
+  await coordinator.event(2, { type: "updated", status: "loading" });
+  browser.captureError = new Error("Either the '<all_urls>' or 'activeTab' permission is required.");
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  await time.advance(700);
+  const view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.pauseReason, "permission");
+});
