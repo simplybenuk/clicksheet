@@ -128,7 +128,9 @@ function fitText(ctx, text, maxWidth) {
 // Outlines the clicked target and marks the click point on the frame that
 // owns the interaction. Stroke only, so the target itself stays readable.
 // `imageBox` is where the screenshot was drawn; coordinates are CSS px.
-export function drawTargetMarker(ctx, frame, imageBox) {
+// `size` scales stroke widths and the click ring: 1 for export cells, smaller
+// for toolbar previews where full-size strokes would hide the target.
+export function drawTargetMarker(ctx, frame, imageBox, { size = 1 } = {}) {
   const interaction = frame?.interaction;
   const viewportWidth = frame?.viewport?.width;
 
@@ -152,10 +154,10 @@ export function drawTargetMarker(ctx, frame, imageBox) {
     const width = rect.width * scale;
     const height = rect.height * scale;
     ctx.strokeStyle = COLORS.markerOutline;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 5 * size;
     ctx.strokeRect(x, y, width, height);
     ctx.strokeStyle = COLORS.marker;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * size;
     ctx.strokeRect(x, y, width, height);
   }
 
@@ -163,15 +165,15 @@ export function drawTargetMarker(ctx, frame, imageBox) {
     const x = imageBox.x + point.x * scale;
     const y = imageBox.y + point.y * scale;
     ctx.beginPath();
-    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.arc(x, y, 7 * size, 0, Math.PI * 2);
     ctx.strokeStyle = COLORS.markerOutline;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 5 * size;
     ctx.stroke();
     ctx.strokeStyle = COLORS.marker;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * size;
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.arc(x, y, 2 * size, 0, Math.PI * 2);
     ctx.fillStyle = COLORS.marker;
     ctx.fill();
   }

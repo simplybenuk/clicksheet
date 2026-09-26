@@ -10,7 +10,7 @@ export async function createThumbnail(file, frame = null) {
     const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
     const context = canvas.getContext("2d");
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    if (frame) drawTargetMarker(context, frame, { x: 0, y: 0, width: canvas.width, height: canvas.height });
+    if (frame) drawTargetMarker(context, frame, { x: 0, y: 0, width: canvas.width, height: canvas.height }, { size: 0.5 });
     const blob = await canvas.convertToBlob({ type: "image/png" });
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let binary = "";
