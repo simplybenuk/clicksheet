@@ -628,7 +628,7 @@ export function createJourneyCoordinator({
       recordingElsewhere: Boolean(state.recording && state.recording.tabId !== tabId),
       elapsedMs: selected && state.recording?.journeyId === selected.id
         ? (state.recording.elapsedMs ?? 0) + (state.recording.activeSince != null ? Math.max(0, now() - state.recording.activeSince) : 0)
-        : null,
+        : selected && state.released?.journeyId === selected.id ? state.released.elapsedMs : null,
       canExport: Boolean(selected?.frames.length && view.available),
       undo: state.undo && state.undo.journeyId === selected?.id ? { frameId: state.undo.frame.id } : null,
       notice,

@@ -5,6 +5,7 @@ import { until } from "./harness.mjs";
 export async function run(t) {
   await duringCaptureThenNavigate(t);
   await repeatedClicks(t);
+  await fixedAfterFullPage(t);
   await elapsedTime(t);
 }
 
@@ -22,7 +23,9 @@ async function repeatedClicks(t) {
   await page.waitForTimeout(1500);
   for (let n = 0; n < 5; n++) {
     await page.click('[data-action="next-page"]');
-    await page.waitForTimeout(1200);
+    // Under a second apart, so the list's own changes fill the ambient
+    // window; the pre-fix rule lost frames at this pace.
+    await page.waitForTimeout(900);
   }
   const frames = toolbar.locator(".clicksheet-toolbar__frame");
   check("five repeated async clicks give five frames", await s.count(6, 5000), `frames=${await frames.count()}`);
@@ -32,6 +35,36 @@ async function repeatedClicks(t) {
   await page.click('[data-action="noop"]');
   await page.waitForTimeout(2500);
   check("no-op clicks beside a ticking clock still give no frames", await frames.count() === 6, `frames=${await frames.count()}`);
+  // Keyboard activity marks every change as prompted; the clock must still
+  // be recognised as ambient afterwards.
+  for (let n = 0; n < 18; n++) {
+    await page.keyboard.press("Shift");
+    await page.waitForTimeout(200);
+  }
+  await page.click('[data-action="noop"]');
+  await page.waitForTimeout(2500);
+  check("typing, then a no-op click beside the clock, gives no frame", await frames.count() === 6, `frames=${await frames.count()}`);
+}
+
+// Full-page capture hides fixed elements; afterwards the page's own inline
+// style change on one of them (opening a notice) must still count.
+async function fixedAfterFullPage(t) {
+  const s = await t.launch();
+  const { page, toolbar } = s;
+  const { check } = t;
+  await s.open("/long.html");
+  await s.newJourney();
+  await toolbar.locator('[data-action="settings"]').click();
+  await toolbar.locator('[data-role="capture-area"]').selectOption("fullPage");
+  await toolbar.locator('[data-action="save-settings"]').click();
+  await until(async () => (await s.readJourney()).settings, (v) => v?.captureArea === "fullPage");
+  await toolbar.locator('[data-action="record"]').click();
+  await s.count(1, 10000);
+  const first = await s.readJourney();
+  check("the first frame is a full-page capture", first.frames[0]?.captureArea === "fullPage", first.frames[0]?.captureArea);
+  await page.waitForTimeout(1500);
+  await page.click('[data-action="open-notice"]');
+  check("a fixed notice opened by inline style after a full-page capture gives a frame", await s.count(2, 12000));
 }
 
 async function duringCaptureThenNavigate(t) {

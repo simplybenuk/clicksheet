@@ -332,6 +332,7 @@
   const AMBIENT_CHANGES = 3;
   let ambientObserver = null;
   let ambientHistory = new WeakMap();
+  let ambientSince = new WeakMap();
   const changedElement = (record) => record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement;
   // Clicks and keys can start slow async work, so their window is long.
   // Hover and focus styling applies at once, so theirs is short: the mouse
@@ -346,6 +347,7 @@
   function startAmbient() {
     if (ambientObserver) return;
     ambientHistory = new WeakMap();
+    ambientSince = new WeakMap();
     ambientObserver = new MutationObserver((records) => {
       // Changes shortly after the user clicks, hovers, focuses, or types may
       // be their doing (async results, hover styles), so they are marked as
@@ -361,6 +363,11 @@
         // before it plus the watch after it. Changes after a click must not
         // push out the ones before it.
         ambientHistory.set(element, history.filter((entry) => entry.at >= at - AMBIENT_WINDOW_MS - WATCH_MS).slice(-32));
+        // Once an element shows it changes on its own, it stays ambient while
+        // it keeps changing, even through typing or tabbing that marks every
+        // later change as prompted.
+        const recent = history.filter((entry) => entry.at >= at - AMBIENT_WINDOW_MS);
+        if (recent.length >= AMBIENT_CHANGES && recent.some((entry) => !entry.prompted)) ambientSince.set(element, at);
       }
     });
     ambientObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -370,6 +377,7 @@
   startAmbient();
   function isAmbient(element, clickedAt) {
     const recent = (ambientHistory.get(element) ?? []).filter(({ at }) => at < clickedAt && at >= clickedAt - AMBIENT_WINDOW_MS);
+    if (ambientSince.has(element) && ambientSince.get(element) < clickedAt && recent.length) return true;
     return recent.length >= AMBIENT_CHANGES && recent.some(({ prompted }) => !prompted);
   }
   function watchForChange() {

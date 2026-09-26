@@ -430,7 +430,9 @@ test("resuming after the recorded tab closed keeps the segment's elapsed time", 
   await time.advance(3000);
   await coordinator.forgetTab(1);
   await time.advance(60000);
-  let view = await coordinator.request(2, { action: "resume", journeyId: id }, context);
+  let view = await coordinator.request(2, { action: "open", id });
+  assert.equal(view.elapsedMs, 3000, "a released segment still shows its time");
+  view = await coordinator.request(2, { action: "resume", journeyId: id }, context);
   await time.advance(1000);
   view = await coordinator.request(2, { action: "snapshot", journeyId: id });
   assert.equal(view.elapsedMs, 4000);
