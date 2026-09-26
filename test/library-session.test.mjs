@@ -569,3 +569,26 @@ test("pending model changes survive losing and reconnecting the folder", async (
   assert.equal(saved.state, "Paused");
   assert.equal(saved.frames[0].id, "held");
 });
+
+test("starting a new library after the folder is gone drops held edits for missing Journeys with a warning", async () => {
+  const old = createVolume("old");
+  const fresh = createVolume("fresh");
+  const { session } = setup();
+  await session.chooseRoot(old.root);
+  const saved = session.createJourney();
+  await session.flush();
+  old.removed = true;
+  session.rename(saved.id, "Held for a folder that is gone");
+  await session.flush();
+  assert.equal(session.snapshot().status, SAVE_STATUS.unavailable);
+  const unsaved = session.createJourney();
+  assert.equal(unsaved, null, "no new Journey while storage is unavailable");
+
+  assert.equal(await session.chooseRoot(fresh.root), true);
+  const view = session.snapshot();
+  assert.equal(view.status, SAVE_STATUS.saved);
+  assert.deepEqual(view.journeys.map((journey) => journey.id), []);
+  assert.match(view.message.text, /1 unsaved change\(s\) belonged to Journeys that are not in fresh/);
+  assert.equal(view.hasUnsavedChanges, false);
+  assert.deepEqual(Object.keys(snapshot(fresh.root)).filter((path) => path.startsWith("journeys/") && path.endsWith(".json")), []);
+});

@@ -1,6 +1,6 @@
 import { loadRootHandle, saveRootHandle } from "../core/handle-store.js";
 import { createLibrarySession } from "../core/library-session.js";
-import { DEFAULT_JOURNEY_NAME, describeStorageError } from "../core/storage.js";
+import { containsLibrary, DEFAULT_JOURNEY_NAME, describeStorageError } from "../core/storage.js";
 
 const PICKER_OPTIONS = { id: "clicksheet-root", mode: "readwrite" };
 
@@ -12,12 +12,13 @@ const elements = {
   choose: document.querySelector('[data-action="choose"]'),
   reconnect: document.querySelector('[data-action="reconnect"]'),
   locate: document.querySelector('[data-action="locate"]'),
+  startNew: document.querySelector('[data-action="start-new"]'),
   move: document.querySelector('[data-action="move"]'),
   newJourney: document.querySelector('[data-action="new-journey"]')
 };
 
 const rows = new Map();
-const actions = [elements.choose, elements.reconnect, elements.locate, elements.move];
+const actions = [elements.choose, elements.reconnect, elements.locate, elements.startNew, elements.move];
 // Actions stay disabled until the stored folder has been checked, so a click
 // cannot race the startup connect.
 let ready = false;
@@ -33,6 +34,7 @@ function render(view) {
   elements.choose.hidden = view.hasRoot;
   elements.reconnect.hidden = !view.hasRoot || view.available;
   elements.locate.hidden = !view.hasRoot || view.available;
+  elements.startNew.hidden = !view.hasRoot || view.available;
   elements.move.hidden = !view.hasRoot || !view.available;
   actions.forEach((button) => {
     button.disabled = !ready || view.moving || view.connecting;
@@ -134,6 +136,26 @@ function runAction(action) {
 elements.choose.addEventListener("click", runAction(withPickedDirectory(session.chooseRoot)));
 elements.reconnect.addEventListener("click", runAction(session.reconnect));
 elements.locate.addEventListener("click", runAction(withPickedDirectory(session.locate)));
+// For a library that is gone for good. Switching is always explicit
+// (FR-004.6): the user confirms, and a folder that already holds Journeys is
+// sent to Locate instead so an existing library is never treated as new.
+elements.startNew.addEventListener(
+  "click",
+  runAction(async () => {
+    const confirmed = window.confirm(
+      "Start a new, empty library in another folder?\n\nJourneys in the missing folder will no longer appear here. Changes held on this page for them will be discarded; new Journeys that were never saved move to the new folder. Nothing is deleted."
+    );
+    if (!confirmed) return;
+    const directory = await pickDirectory();
+    if (!directory) return;
+    if (await containsLibrary(directory)) {
+      elements.message.textContent = `${directory.name} already contains Clicksheet Journeys. Use Locate folder to reconnect it.`;
+      elements.message.dataset.tone = "warn";
+      return;
+    }
+    await session.chooseRoot(directory);
+  })
+);
 elements.move.addEventListener(
   "click",
   runAction(async () => {
