@@ -67,10 +67,11 @@ export function createJourneyCoordinator({
 }) {
   const session = sessionFactory({ loadRootHandle, saveRootHandle });
   const clicks = new Map();
+  const navigating = new Set();
   const notices = new Map();
-  // One deleted screenshot can be restored; its file is removed once the
-  // Undo window ends so deleted pixels do not linger in the folder.
-  let undo = null;
+  // One deleted screenshot can be restored (memory.undo); its file is removed
+  // once the Undo window ends so deleted pixels do not linger in the folder.
+  // It is persisted because the worker idles out long before users click Undo.
   let memory = null;
   let scheduler = null;
   let tail = Promise.resolve();
@@ -84,7 +85,7 @@ export function createJourneyCoordinator({
   async function remember() {
     if (!memory) {
       const stored = await bindings.load().catch(() => null);
-      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null };
+      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null };
     }
     return memory;
   }
@@ -164,9 +165,12 @@ export function createJourneyCoordinator({
     let warning = "";
     try {
       await assertVisible(tabId);
-      page = await browser.prepare(tabId);
       try {
-        image = await browser.sanitize(await captureVisible(tabId), page);
+        // The toolbar is hidden and password fields are measured inside the
+        // rate gate, directly before the pixels are taken, so a wait for the
+        // quota cannot leave stale mask positions.
+        const raw = await captureVisible(tabId, async () => { page = await browser.prepare(tabId); });
+        image = await browser.sanitize(raw, page);
         if (journey.settings?.captureArea === "fullPage") {
           try {
             const full = await captureFullPage(tabId, page);
@@ -208,8 +212,11 @@ export function createJourneyCoordinator({
 
   // The visibility check sits inside the gate, directly before the capture,
   // because captureVisibleTab captures whichever tab is showing.
-  function captureVisible(tabId) {
+  function captureVisible(tabId, before = async () => {}) {
     return gate(async () => {
+      await before();
+      // Checked after preparing, which can take a few frames, and directly
+      // before the capture.
       await assertVisible(tabId);
       try {
         return await browser.captureVisible(tabId);
@@ -218,6 +225,7 @@ export function createJourneyCoordinator({
         // Another extension or a burst can exhaust the shared quota; one
         // retry after the window passes is enough to recover (FR-006.12).
         await sleep(1000);
+        await before();
         await assertVisible(tabId);
         return browser.captureVisible(tabId);
       }
@@ -236,8 +244,9 @@ export function createJourneyCoordinator({
     const segments = [];
     for (const [index, y] of plan.positions.entries()) {
       // Fixed and sticky elements would repeat in every segment after the first.
-      const position = await browser.scrollTo(tabId, { y, hideFixed: index > 0 });
-      segments.push({ blob: await captureVisible(tabId), scrollY: position.scrollY, masks: position.masks });
+      let position;
+      const blob = await captureVisible(tabId, async () => { position = await browser.scrollTo(tabId, { y, hideFixed: index > 0 }); });
+      segments.push({ blob, scrollY: position.scrollY, masks: position.masks });
     }
     const image = await stitch(segments, { width: plan.width, height: plan.height, viewportWidth: page.viewport.width });
     return { image, viewport: fullPageViewport({ width: plan.width, height: plan.height, devicePixelRatio: page.viewport.devicePixelRatio }) };
@@ -266,18 +275,36 @@ export function createJourneyCoordinator({
     const journey = find(view, candidate.journeyId);
     const bound = state.recording;
     if (!isCurrent() || !root || !journey || !bound || bound.journeyId !== journey.id ||
-        bound.tabId !== candidate.tabId || journey.state !== JOURNEY_STATE.recording || !view.editable) return;
+        bound.tabId !== candidate.tabId || journey.state !== JOURNEY_STATE.recording) return;
+    if (!view.editable) {
+      // Capture pauses visibly rather than dropping clicks (FR-004.5).
+      notices.set(candidate.tabId, "Recording paused because the storage folder is unavailable. Reconnect it on the Storage page.");
+      await pauseForError(journey.id, { pauseReason: "storage" });
+      notify(candidate.tabId);
+      return;
+    }
     try {
       const captured = await capturePage(candidate.tabId, FRAME_KIND.click, journey);
       if (!isCurrent()) return;
       await addFrame(root, find(session.snapshot(), journey.id), captured, { click: candidate.click });
       notify(candidate.tabId);
     } catch (error) {
+      // The page went away mid-capture; the navigation's completion offers
+      // the click again, so this is not lost access.
+      if (!isCurrent() || navigating.has(candidate.tabId) || await isLoading(candidate.tabId)) return;
       // Report here: pausing invalidates the scheduler token, which would
       // otherwise suppress its error callback.
       notices.set(candidate.tabId, describeCaptureError(error));
       await pauseForError(journey.id, error);
       notify(candidate.tabId);
+    }
+  }
+
+  async function isLoading(tabId) {
+    try {
+      return Boolean(await browser.isLoading?.(tabId));
+    } catch {
+      return false;
     }
   }
 
@@ -312,9 +339,10 @@ export function createJourneyCoordinator({
   }
 
   async function endUndo(root) {
-    if (!undo) return;
-    const ended = undo;
-    undo = null;
+    if (!memory.undo) return;
+    const ended = memory.undo;
+    memory.undo = null;
+    await persist();
     await createStorage(root).deleteScreenshot(ended.journeyId, ended.frame.screenshotFile).catch(() => {});
   }
 
@@ -322,7 +350,7 @@ export function createJourneyCoordinator({
   async function pruneScreenshots(root, journey) {
     const storage = createStorage(root);
     const keep = new Set(journey.frames.map((frame) => frame.screenshotFile));
-    if (undo?.journeyId === journey.id) keep.add(undo.frame.screenshotFile);
+    if (memory.undo?.journeyId === journey.id) keep.add(memory.undo.frame.screenshotFile);
     for (const name of await storage.listScreenshots(journey.id).catch(() => [])) {
       if (!keep.has(name)) await storage.deleteScreenshot(journey.id, name).catch(() => {});
     }
@@ -332,6 +360,11 @@ export function createJourneyCoordinator({
     const state = await remember();
     let { root, view } = await sync();
     if (root && ENDS_UNDO.has(command.action)) await endUndo(root);
+    // An explicit id that no longer exists (folder removed by hand) must not
+    // silently redirect a capture or edit into another Journey.
+    if (command.journeyId && !find(view, command.journeyId) && !["snapshot", "open", "new"].includes(command.action)) {
+      throw new Error("Journey not found. Reopen it from Journeys.");
+    }
     let id = command.journeyId ?? state.selections[tabId];
     if (!find(view, id)) id = view.journeys[0]?.id ?? null;
     if (state.selections[tabId] !== id) {
@@ -421,15 +454,18 @@ export function createJourneyCoordinator({
         const index = requireFrame(current, command.frameId, view);
         const frames = current.frames.filter((_, position) => position !== index);
         session.updateJourney(current.id, { frames });
-        undo = { journeyId: current.id, frame: current.frames[index], index, tabId };
+        state.undo = { journeyId: current.id, frame: current.frames[index], index };
+        await persist();
         break;
       }
       case "undo-delete": {
+        const undo = state.undo;
         if (!current || !view.editable || undo?.journeyId !== current.id) throw new Error("There is nothing to undo.");
         const frames = [...current.frames];
         frames.splice(Math.min(undo.index, frames.length), 0, undo.frame);
         session.updateJourney(current.id, { frames });
-        undo = null;
+        state.undo = null;
+        await persist();
         break;
       }
       case "move-frame": {
@@ -491,7 +527,11 @@ export function createJourneyCoordinator({
         if (!["copy", "download"].includes(command.destination)) throw new Error("Choose Copy image or Download image.");
         const storage = createStorage(root);
         const blob = await renderSheet(prepareJourney(current), async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile)));
-        if (command.destination === "copy") return { ...present(tabId), image: await toDataUrl(blob) };
+        if (command.destination === "copy") {
+          // Runtime messages are capped at 64 MiB; base64 adds a third.
+          if (blob.size > 45 * 1024 * 1024) throw new Error("This contact sheet is too large to copy. Use Download image instead.");
+          return { ...present(tabId), image: await toDataUrl(blob) };
+        }
         const { fileName } = await storage.writeExport(current.id, current.name, blob);
         notices.set(tabId, `Saved ${fileName} in ${view.folderName}/journeys/${current.id}/exports.`);
         return { ...present(tabId), exported: { fileName } };
@@ -552,7 +592,7 @@ export function createJourneyCoordinator({
       recordingHere: state.recording?.tabId === tabId && state.recording.journeyId === selected?.id,
       recordingElsewhere: Boolean(state.recording && state.recording.tabId !== tabId),
       canExport: Boolean(selected?.frames.length && view.available),
-      undo: undo && undo.journeyId === selected?.id ? { frameId: undo.frame.id } : null,
+      undo: state.undo && state.undo.journeyId === selected?.id ? { frameId: state.undo.frame.id } : null,
       notice,
       // Only summaries go into the popover; frames belong to the selected strip.
       journeys: view.journeys.map(({ id, name }) => ({ id, name }))
@@ -570,8 +610,11 @@ export function createJourneyCoordinator({
         return;
       case "changed": {
         const pending = recentClick(tabId);
-        if (!pending || bound?.tabId !== tabId) return;
-        clicks.delete(tabId);
+        if (!pending || pending.offered || bound?.tabId !== tabId) return;
+        // Kept for the attribution window: a click that changes the page and
+        // then navigates (a submit button showing "Saving…") must still
+        // capture the page it leads to.
+        pending.offered = true;
         offer(tabId, pending.click);
         return;
       }
@@ -582,11 +625,17 @@ export function createJourneyCoordinator({
       case "updated":
         if (bound?.tabId !== tabId) return;
         if (event.status === "loading") {
+          navigating.add(tabId);
           const pending = recentClick(tabId);
-          if (pending) pending.navigating = true;
+          if (pending) {
+            pending.navigating = true;
+            // Any settled candidate belongs to the page being left.
+            stopScheduler();
+          }
           return;
         }
         if (event.status !== "complete") return;
+        navigating.delete(tabId);
         if (originOf(event.url) !== bound.origin) {
           // Temporary access ends with a cross-origin navigation (FR-005.4).
           clicks.delete(tabId);
@@ -662,6 +711,9 @@ export function createJourneyCoordinator({
       return enqueue(() => execute(tabId, command ?? {}, context));
     },
     event(tabId, event) {
+      // Navigation state is recorded at once: a capture already queued or in
+      // flight must see it, not wait behind it.
+      if (event?.type === "updated" && event.status === "loading") navigating.add(tabId);
       return enqueue(() => handleEvent(tabId, event ?? {}));
     },
     forgetTab(tabId) {

@@ -127,3 +127,20 @@ test("a redaction that cannot be saved keeps the original file", async () => {
   env.volume.failWritesMatching = null;
   assert.ok((await createStorage(env.volume.root).listScreenshots(id)).includes(original.screenshotFile));
 });
+
+test("Undo survives the worker idling out", async () => {
+  const { memoryBindings } = await import("../extension/core/journey-coordinator.js");
+  const bindings = memoryBindings();
+  const first = setup({ bindings });
+  const created = await first.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  const captured = await first.coordinator.request(1, { action: "capture", journeyId: id }, first.context);
+  const frameId = captured.currentJourney.frames[0].id;
+  await first.coordinator.request(1, { action: "delete-frame", journeyId: id, frameId });
+  const restarted = setup({ bindings, volume: first.volume });
+  let view = await restarted.coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.deepEqual(view.undo, { frameId });
+  view = await restarted.coordinator.request(1, { action: "undo-delete", journeyId: id });
+  assert.deepEqual(view.currentJourney.frames.map((frame) => frame.id), [frameId]);
+  assert.equal(await (await createStorage(first.volume.root).readScreenshot(id, `${frameId}.png`)).text(), "pixels of /dashboard");
+});

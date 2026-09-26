@@ -16,6 +16,14 @@
     permission: "Paused. Resume to continue recording from this page.",
     storage: "Paused until storage is reconnected on the Storage page."
   };
+  // The toolbar lives in a closed shadow root so page scripts cannot read
+  // screenshot previews or Journey names, which may come from other sites.
+  const host = document.createElement("clicksheet-toolbar");
+  host.setAttribute("style", "all: initial");
+  const shadow = host.attachShadow({ mode: "closed" });
+  const style = document.createElement("style");
+  style.textContent = window.__clicksheetToolbarCss ?? "";
+  shadow.append(style);
   const root = document.createElement("aside");
   root.id = ROOT_ID;
   root.setAttribute("role", "region");
@@ -75,7 +83,8 @@
         <p data-role="message" aria-live="polite">Connecting to your local library…</p>
       </div>
     </div>`;
-  document.documentElement.append(root);
+  shadow.append(root);
+  document.documentElement.append(host);
   const role = (name) => root.querySelector(`[data-role="${name}"]`);
   const action = (name) => root.querySelector(`[data-action="${name}"]`);
   let view = null;
@@ -144,7 +153,7 @@
   function render() {
     const journey = view?.currentJourney;
     const controls = view?.controls ?? {};
-    if (document.activeElement !== role("name") && savedRevision === renameRevision) role("name").value = journey?.name ?? "";
+    if (shadow.activeElement !== role("name") && savedRevision === renameRevision) role("name").value = journey?.name ?? "";
     role("name").disabled = busy || !journey || !view?.renamable;
     role("state").textContent = journey?.state ?? "Ready";
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < renameRevision ? "Saving" : view?.status ?? "";
@@ -177,7 +186,7 @@
     action("delete").disabled = !editable;
     action("undo").hidden = !view?.undo;
     action("undo").disabled = busy || !view?.editable;
-    if (document.activeElement !== role("capture-delay") && journey) {
+    if (shadow.activeElement !== role("capture-delay") && journey) {
       role("capture-area").value = journey.settings?.captureArea ?? "viewport";
       role("capture-delay").value = String(journey.settings?.captureDelayMs ?? 500);
     }
@@ -300,7 +309,7 @@
     const href = location.href;
     const changed = () => { stopWatch(); sendEvent({ type: "changed" }); };
     const mutations = new MutationObserver((records) => {
-      if (records.some((record) => !root.contains(record.target) && rendered(record.target))) changed();
+      if (records.some((record) => record.target !== host && rendered(record.target))) changed();
     });
     mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
     // pushState fires no event, so the URL is also polled briefly.
@@ -317,7 +326,12 @@
       window.removeEventListener("hashchange", checkUrl);
     };
   }
+  // Labels come only from the accessible name of interactive targets. Text in
+  // paragraphs or editors is page content that a later redaction could not
+  // remove from the export, so those targets are labelled just "Click".
+  const TEXT_NAMED = "a[href], button, summary, label, [role='button'], [role='link'], [role='tab'], [role='menuitem'], [role='option'], [role='checkbox']";
   function describeTarget(element) {
+    if (!element.matches(INTERACTIVE) || element.isContentEditable) return "";
     const clean = (text) => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
     const labelled = element.getAttribute("aria-labelledby")?.split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(" ");
     if (element.matches(PASSWORD_SELECTOR)) return clean(element.getAttribute("aria-label") || element.labels?.[0]?.textContent || "Password");
@@ -325,11 +339,12 @@
     const buttonValue = element.matches("input[type='submit'], input[type='button'], input[type='reset']") ? element.value : "";
     return clean(element.getAttribute("aria-label") || labelled || element.labels?.[0]?.textContent ||
       buttonValue || element.getAttribute("alt") || element.getAttribute("title") ||
-      (element.matches("input, select, textarea") ? element.getAttribute("placeholder") || element.getAttribute("name") : element.innerText));
+      (element.matches("input, select, textarea") ? element.getAttribute("placeholder") || element.getAttribute("name") : element.matches(TEXT_NAMED) ? element.innerText : ""));
   }
   document.addEventListener("click", (event) => {
-    if (!event.isTrusted || !observing() || !(event.target instanceof Element) || root.contains(event.target)) return;
+    if (!event.isTrusted || !observing() || !(event.target instanceof Element) || event.target === host) return;
     const element = event.target.closest(INTERACTIVE) ?? event.target;
+    trackPassword(element);
     const rect = element.getBoundingClientRect();
     sendEvent({
       type: "click",
@@ -347,21 +362,84 @@
 
   // Capture preparation: hide the toolbar and report password fields so their
   // pixels are covered before the screenshot is stored.
-  function passwordFields() {
-    const found = [];
-    const visit = (scope) => {
-      for (const element of scope.querySelectorAll(PASSWORD_SELECTOR)) { seenPasswords.add(element); found.push(element); }
-      for (const host of scope.querySelectorAll("*")) if (host.shadowRoot) visit(host.shadowRoot);
-    };
-    visit(document);
-    // A "show password" toggle turns the field into plain text; keep masking it.
-    for (const element of document.querySelectorAll("input")) if (seenPasswords.has(element) && !found.includes(element)) found.push(element);
+  // Password fields are tracked for as long as the toolbar is present, so a
+  // field revealed by a "show password" toggle before any capture is still
+  // treated as a password.
+  function trackPassword(element) {
+    if (element instanceof HTMLInputElement && element.matches(PASSWORD_SELECTOR)) seenPasswords.add(element);
+  }
+  function scanPasswords(scope) {
+    for (const element of scope.querySelectorAll?.(PASSWORD_SELECTOR) ?? []) seenPasswords.add(element);
+    for (const child of scope.querySelectorAll?.("*") ?? []) if (child.shadowRoot) scanPasswords(child.shadowRoot);
+  }
+  scanPasswords(document);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === "attributes" && record.oldValue === "password") seenPasswords.add(record.target);
+      else if (record.type === "attributes") trackPassword(record.target);
+      for (const node of record.addedNodes) if (node.nodeType === Node.ELEMENT_NODE) { trackPassword(node); scanPasswords(node); }
+    }
+  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["type", "autocomplete"], attributeOldValue: true });
+  document.addEventListener("focusin", (event) => trackPassword(event.target), true);
+  document.addEventListener("input", (event) => trackPassword(event.target), true);
+
+  // Same-origin frames are searched too; their fields are offset by the
+  // frame's position. Cross-origin frames cannot be inspected.
+  function frameDocuments() {
+    const found = [{ doc: document, x: 0, y: 0 }];
+    for (let index = 0; index < found.length; index++) {
+      for (const frame of found[index].doc.querySelectorAll("iframe, frame")) {
+        let doc = null;
+        try { doc = frame.contentDocument; } catch { doc = null; }
+        if (!doc?.documentElement) continue;
+        const box = frame.getBoundingClientRect();
+        found.push({ doc, x: found[index].x + box.left + frame.clientLeft, y: found[index].y + box.top + frame.clientTop });
+      }
+    }
     return found;
   }
+  function passwordFields() {
+    const fields = [];
+    for (const { doc, x, y } of frameDocuments()) {
+      if (doc !== document) scanPasswords(doc);
+      for (const element of doc.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x, y });
+    }
+    // Open shadow roots in the top document.
+    const visit = (scope) => {
+      for (const child of scope.querySelectorAll("*")) {
+        if (!child.shadowRoot || child === host) continue;
+        for (const element of child.shadowRoot.querySelectorAll("input")) if (seenPasswords.has(element)) fields.push({ element, x: 0, y: 0 });
+        visit(child.shadowRoot);
+      }
+    };
+    visit(document);
+    return fields;
+  }
   function passwordMasks() {
-    return passwordFields().flatMap((element) => [...element.getClientRects()].map((rect) => ({
-      x: rect.left, y: rect.top, width: rect.width, height: rect.height
+    return passwordFields().flatMap(({ element, x, y }) => [...element.getClientRects()].map((rect) => ({
+      x: rect.left + x, y: rect.top + y, width: rect.width, height: rect.height
     }))).filter((box) => box.width > 0 && box.height > 0 && box.x < innerWidth && box.y < innerHeight && box.x + box.width > 0 && box.y + box.height > 0);
+  }
+  // While the pixels are taken, field text is made transparent as well, so a
+  // layout shift between measuring and capturing cannot reveal characters.
+  let coveredFields = null;
+  const COVER = [["color", "transparent"], ["-webkit-text-fill-color", "transparent"], ["text-shadow", "none"], ["caret-color", "transparent"]];
+  function coverPasswords() {
+    if (coveredFields) return;
+    coveredFields = passwordFields().map(({ element }) => {
+      const saved = COVER.map(([name]) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+      for (const [name, value] of COVER) element.style.setProperty(name, value, "important");
+      return [element, saved];
+    });
+  }
+  function uncoverPasswords() {
+    for (const [element, saved] of coveredFields ?? []) {
+      for (const [name, value, priority] of saved) {
+        if (value) element.style.setProperty(name, value, priority);
+        else element.style.removeProperty(name);
+      }
+    }
+    coveredFields = null;
   }
   function afterPaint() {
     return new Promise((done) => {
@@ -372,6 +450,7 @@
   async function prepareCapture() {
     if (hiddenForCapture === null) hiddenForCapture = root.hidden;
     root.hidden = true;
+    coverPasswords();
     await afterPaint();
     const page = document.scrollingElement ?? document.documentElement;
     return {
@@ -389,7 +468,7 @@
     if (hideFixed && hiddenFixed === null) {
       hiddenFixed = [];
       for (const element of document.body?.querySelectorAll("*") ?? []) {
-        if (root.contains(element)) continue;
+        if (element === host) continue;
         const position = getComputedStyle(element).position;
         if (position !== "fixed" && position !== "sticky") continue;
         hiddenFixed.push([element, element.style.getPropertyValue("visibility"), element.style.getPropertyPriority("visibility")]);
@@ -401,6 +480,7 @@
     return { scrollY: window.scrollY, masks: passwordMasks() };
   }
   function restoreCapture() {
+    uncoverPasswords();
     for (const [element, value, priority] of hiddenFixed ?? []) {
       if (value) element.style.setProperty("visibility", value, priority);
       else element.style.removeProperty("visibility");

@@ -31,6 +31,9 @@ const browser = {
       return position;
     });
   },
+  async isLoading(tabId) {
+    return (await chrome.tabs.get(tabId)).status === "loading";
+  },
   restore(tabId) {
     return chrome.tabs.sendMessage(tabId, { type: "clicksheet:restore-capture" });
   },
@@ -90,8 +93,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return;
   }
   const tabId = sender.tab?.id;
-  if (message?.type === "clicksheet:page-event" && Number.isInteger(tabId)) {
-    void journeys.event(tabId, message.event ?? {});
+  // Pages may only report their own clicks and changes; tab lifecycle events
+  // come from Chrome alone.
+  if (message?.type === "clicksheet:page-event" && Number.isInteger(tabId) && ["click", "changed"].includes(message.event?.type)) {
+    void journeys.event(tabId, message.event);
     return;
   }
   if (message?.type === "clicksheet:journey" && Number.isInteger(tabId)) {
@@ -141,10 +146,15 @@ async function clearUnavailable(tabId, { force = false } = {}) {
   ]);
 }
 
+// The toolbar renders in a closed shadow root, which page-level CSS cannot
+// style, so its stylesheet is handed to the content script's isolated world.
+let toolbarCss = null;
 async function injectToolbar(tabId) {
-  await chrome.scripting.insertCSS({
+  toolbarCss ??= await (await fetch(chrome.runtime.getURL(TOOLBAR_STYLES))).text();
+  await chrome.scripting.executeScript({
     target: { tabId },
-    files: [TOOLBAR_STYLES]
+    func: (css) => { window.__clicksheetToolbarCss = css; },
+    args: [toolbarCss]
   });
   await chrome.scripting.executeScript({
     target: { tabId },

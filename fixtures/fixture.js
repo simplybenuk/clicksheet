@@ -20,3 +20,20 @@ route?.addEventListener("click", (event) => {
   history.pushState({}, "", route.getAttribute("href"));
   routeLabel.textContent = "Route: users";
 });
+
+// A submit-style button that changes itself, then navigates after a slow
+// server response. The page it leads to must still be captured.
+const saveAndGo = document.querySelector('[data-action="save-and-go"]');
+saveAndGo?.addEventListener("click", () => {
+  saveAndGo.textContent = "Saving…";
+  saveAndGo.disabled = true;
+  window.setTimeout(() => { location.href = "/second.html"; }, 700);
+});
+
+// "Show password" turns the field into plain text; it must stay masked.
+const reveal = document.querySelector('[data-action="reveal-password"]');
+const password = document.querySelector('[data-role="password"]');
+reveal?.addEventListener("click", () => {
+  password.type = password.type === "password" ? "text" : "password";
+  reveal.textContent = password.type === "password" ? "Show password" : "Hide password";
+});

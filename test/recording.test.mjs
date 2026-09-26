@@ -283,3 +283,53 @@ test("a capture that hits Chrome's quota waits and retries once", async () => {
   failures = 2;
   await assert.rejects(env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context), /limited how often/);
 });
+
+test("a click that changes the page and then navigates captures the page it leads to", async () => {
+  const { coordinator, time, browser, id } = await recording();
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  await time.advance(200);
+  await coordinator.event(1, { type: "updated", status: "loading" });
+  browser.page.pathname = "/users";
+  await time.advance(1000);
+  let view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.frames.length, 1, "nothing captured while the page is loading");
+  await coordinator.event(1, { type: "updated", status: "complete", url: `${ORIGIN}/users` });
+  await time.advance(500);
+  view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.deepEqual(view.currentJourney.frames.map((frame) => frame.pathname), ["/dashboard", "/users"]);
+  assert.equal(view.currentJourney.state, "Recording");
+  assert.equal(view.currentJourney.frames[0].interaction.label, "Save");
+});
+
+test("a capture that fails because the page is navigating does not pause for lost access", async () => {
+  const { coordinator, time, browser, id } = await recording();
+  await coordinator.event(1, click("Save"));
+  await coordinator.event(1, { type: "changed" });
+  const prepare = browser.prepare;
+  browser.prepare = async () => {
+    void coordinator.event(1, { type: "updated", status: "loading" });
+    throw new Error("Could not establish connection. Receiving end does not exist.");
+  };
+  await time.advance(500);
+  browser.prepare = prepare;
+  const view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.state, "Recording");
+});
+
+test("losing the folder while Recording pauses visibly instead of dropping clicks", async () => {
+  const { coordinator, time, volume, id } = await recording();
+  await coordinator.event(1, click("Settings"));
+  await coordinator.event(1, { type: "changed" });
+  volume.removed = true;
+  await time.advance(500);
+  volume.removed = false;
+  const view = await coordinator.request(1, { action: "snapshot", journeyId: id });
+  assert.equal(view.currentJourney.pauseReason, "storage");
+  assert.match(view.notice, /storage folder is unavailable/);
+});
+
+test("an explicit Journey id that no longer exists is refused rather than redirected", async () => {
+  const { coordinator, context } = await recording();
+  await assert.rejects(coordinator.request(1, { action: "capture", journeyId: "gone" }, context), /Journey not found/);
+});

@@ -40,6 +40,7 @@
           <button type="button" data-action="noop">Does nothing</button>
           <a href="/users" data-action="route">Show users</a>
           <a href="/second.html" data-action="navigate">Open second page</a>
+          <button type="button" data-action="save-and-go">Save and continue</button>
         </div>
       </section>
 
@@ -48,8 +49,9 @@
         <h2 id="settings-title">Account settings</h2>
         <label>
           Password
-          <input type="password" value="fixture-secret" autocomplete="current-password">
+          <input type="password" value="fixture-secret" data-role="password">
         </label>
+        <button type="button" data-action="reveal-password">Show password</button>
       </section>
     </main>
   </body>
