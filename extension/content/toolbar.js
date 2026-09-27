@@ -28,40 +28,55 @@
   root.id = ROOT_ID;
   root.setAttribute("role", "region");
   root.setAttribute("aria-label", "Clicksheet");
+  // A floating widget (spec 1.2): the pill is always shown; the panel with
+  // the strip and editing controls expands from it.
   root.innerHTML = `
-    <div class="clicksheet-toolbar__surface">
-      <div class="clicksheet-toolbar__journey">
+    <div class="cs-widget" data-role="widget">
+      <div class="cs-pill">
+        <button type="button" class="cs-grip" data-action="drag" aria-label="Move Clicksheet. Drag, or use the arrow keys." title="Drag to move">⠿</button>
+        <span class="clicksheet-toolbar__mark" aria-hidden="true">C</span>
+        <span class="cs-status">
+          <span data-role="state">Ready</span>
+          <span data-role="elapsed" aria-label="Recording time"></span>
+          <span data-role="count"></span>
+        </span>
+        <span class="cs-primary">
+          <button type="button" data-action="record" disabled>Record</button>
+          <button type="button" data-action="pause" hidden disabled>Pause</button>
+          <button type="button" data-action="resume" hidden disabled>Resume</button>
+          <button type="button" data-action="stop" hidden disabled>Stop</button>
+          <button type="button" data-action="capture" disabled>Capture</button>
+        </span>
+        <button type="button" class="cs-icon" data-action="expand" aria-expanded="false" aria-label="Show screenshots and editing" title="Show screenshots and editing">▴</button>
+        <button type="button" class="cs-icon" data-action="dismiss" aria-label="Hide Clicksheet" title="Hide (click the Clicksheet icon to bring it back)">✕</button>
+      </div>
+      <p data-role="message" class="cs-message" aria-live="polite">Connecting to your local library…</p>
+      <div class="cs-panel" data-role="panel" hidden>
         <div class="clicksheet-toolbar__heading">
-          <span class="clicksheet-toolbar__mark" aria-hidden="true">C</span>
-          <strong>Clicksheet</strong>
           <input data-role="name" aria-label="Journey name" placeholder="Choose or create a Journey">
           <button type="button" data-action="library" aria-expanded="false">Journeys</button>
+          <span data-role="save-status" aria-live="polite"></span>
         </div>
         <div data-role="library" class="clicksheet-toolbar__library" hidden>
           <button type="button" data-action="new">New Journey</button>
           <div data-role="journeys"></div>
         </div>
-        <div class="clicksheet-toolbar__strip" data-role="strip" aria-label="Journey screenshots"></div>
+        <div class="cs-strip-row">
+          <button type="button" class="cs-icon" data-action="strip-prev" aria-label="Scroll screenshots left">‹</button>
+          <div class="clicksheet-toolbar__strip" data-role="strip" aria-label="Journey screenshots"></div>
+          <button type="button" class="cs-icon" data-action="strip-next" aria-label="Scroll screenshots right">›</button>
+        </div>
         <div class="clicksheet-toolbar__frame-actions" data-role="frame-actions">
           <button type="button" data-action="move-left" disabled>Move left</button>
           <button type="button" data-action="move-right" disabled>Move right</button>
           <button type="button" data-action="edit" disabled>Redact…</button>
-          <button type="button" data-action="delete" disabled>Delete</button>
+          <button type="button" class="cs-danger" data-action="delete" disabled>Delete</button>
           <button type="button" data-action="undo" hidden>Undo delete</button>
         </div>
-      </div>
-      <div class="clicksheet-toolbar__controls">
-        <div><span data-role="state">Ready</span><span data-role="elapsed" aria-label="Recording time"></span><span data-role="save-status" aria-live="polite"></span></div>
         <div class="clicksheet-toolbar__actions">
-          <button type="button" data-action="record" disabled>Record</button>
-          <button type="button" data-action="pause" hidden disabled>Pause</button>
-          <button type="button" data-action="resume" hidden disabled>Resume</button>
-          <button type="button" data-action="stop" hidden disabled>Stop</button>
-          <button type="button" data-action="capture" title="Capture the current page (Alt+Shift+C keeps hover and focus states)" disabled>Capture</button>
           <button type="button" data-action="export" aria-expanded="false" disabled>Export</button>
           <button type="button" data-action="settings" aria-expanded="false">Settings</button>
           <button type="button" data-action="storage">Storage</button>
-          <button type="button" data-action="dismiss">Hide</button>
         </div>
         <div class="clicksheet-toolbar__menu" data-role="export-menu" hidden>
           <button type="button" data-action="copy-image">Copy image</button>
@@ -78,9 +93,13 @@
             <input data-role="capture-delay" type="number" min="0" max="10000" step="50" inputmode="numeric">
           </label>
           <button type="submit" data-action="save-settings">Save settings</button>
+          <div class="cs-shortcuts">
+            <span>Keyboard shortcuts</span>
+            <span data-role="shortcut-list">Checking…</span>
+            <button type="button" data-action="open-shortcuts">Set shortcuts…</button>
+          </div>
           <p>Screenshots stay in the folder you chose on this device. They can still show sensitive details you did not redact.</p>
         </form>
-        <p data-role="message" aria-live="polite">Connecting to your local library…</p>
       </div>
     </div>`;
   shadow.append(root);
@@ -107,7 +126,6 @@
     (record.type === "attributes" && record.attributeName === "style" && styledForCapture.has(record.target));
   let scrollBeforeCapture = null;
   let hiddenFixed = null;
-  let draggedFrame = null;
   const seenPasswords = new WeakSet();
   const previews = new Map();
   const previewRequests = new Map();
@@ -165,6 +183,8 @@
     renderElapsed();
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < renameRevision ? "Saving" : view?.status ?? "";
     role("message").textContent = notice || view?.message?.text || statusMessage(journey);
+    // Notices and warnings must be seen even when the widget is collapsed.
+    role("message").dataset.notice = String(Boolean(notice || view?.message?.tone === "warn" || view?.status === "Storage unavailable" || view?.recordingElsewhere));
     action("new").disabled = busy || !view?.editable || (journey && !controls.newJourney);
     role("journeys").replaceChildren(...(view?.journeys ?? []).map((item) => {
       const button = document.createElement("button");
@@ -198,49 +218,173 @@
       role("capture-delay").value = String(journey.settings?.captureDelayMs ?? 500);
     }
     action("save-settings").disabled = busy || !journey || !view?.editable;
-    observer.disconnect();
-    role("strip").replaceChildren(...(journey?.frames ?? []).map((frame, index) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "clicksheet-toolbar__frame";
-      button.setAttribute("aria-pressed", String(frame.id === selectedFrame));
-      button.title = [frame.title, frame.pathname].filter(Boolean).join(" · ");
-      const label = document.createElement("span");
-      label.textContent = `${index + 1}. ${frameLabel(frame)}`;
-      button.append(label);
-      // Screenshot files are never rewritten in place, so the file name is a
-      // stable cache key across Journey saves.
-      button.dataset.previewKey = `${journey.id}:${frame.screenshotFile}`;
-      button.dataset.frameId = frame.id;
-      button.dataset.journeyId = journey.id;
-      observer.observe(button);
-      button.addEventListener("click", () => { selectedFrame = frame.id; render(); });
-      button.addEventListener("keydown", (event) => {
-        if ((event.key === "Delete" || event.key === "Backspace") && !action("delete").disabled) { selectedFrame = frame.id; void run({ action: "delete-frame", frameId: frame.id }); }
-      });
-      // Drag and drop reorders; Move left/right offers the same without a pointer.
-      button.draggable = Boolean(view?.editable);
-      button.addEventListener("dragstart", (event) => { draggedFrame = frame.id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", ""); });
-      button.addEventListener("dragend", () => { draggedFrame = null; });
-      button.addEventListener("dragover", (event) => { if (draggedFrame && draggedFrame !== frame.id) event.preventDefault(); });
-      button.addEventListener("drop", (event) => {
-        event.preventDefault();
-        const moving = draggedFrame;
-        draggedFrame = null;
-        if (moving && moving !== frame.id) { selectedFrame = moving; void run({ action: "move-frame", frameId: moving, toIndex: index }); }
-      });
-      return button;
-    }));
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "clicksheet-toolbar__add";
-    add.textContent = "+ Add screenshot";
-    add.disabled = busy || !controls.capture;
-    add.title = "Capture the current page";
-    add.addEventListener("click", () => run({ action: "capture" }));
-    role("strip").append(add);
+    renderStrip(journey, controls);
+    root.dataset.recording = String(journey?.state === "Recording");
+    role("count").textContent = journey?.frames.length ? `${journey.frames.length} shot${journey.frames.length === 1 ? "" : "s"}` : "";
     if (!observing()) stopWatch();
   }
+
+  // Thumbnails are kept per frame and only moved or relabelled, so the strip
+  // keeps its scroll position and loaded previews across updates.
+  const thumbs = new Map();
+  let stripJourney = null;
+  let stripCount = -1;
+  function renderStrip(journey, controls) {
+    const strip = role("strip");
+    const frames = journey?.frames ?? [];
+    if (stripJourney !== journey?.id) {
+      for (const button of thumbs.values()) button.remove();
+      thumbs.clear();
+      observer.disconnect();
+    }
+    const live = new Set(frames.map((frame) => frame.id));
+    for (const [id, button] of thumbs) if (!live.has(id)) { observer.unobserve(button); button.remove(); thumbs.delete(id); }
+    frames.forEach((frame, index) => {
+      let button = thumbs.get(frame.id);
+      const previewKey = `${journey.id}:${frame.screenshotFile}`;
+      if (!button || button.dataset.previewKey !== previewKey) {
+        button?.remove();
+        button = createThumb(journey, frame, previewKey);
+        thumbs.set(frame.id, button);
+      }
+      button.querySelector("span").textContent = `${index + 1}. ${frameLabel(frame)}`;
+      button.title = [frame.title, frame.pathname].filter(Boolean).join(" · ");
+      button.setAttribute("aria-pressed", String(frame.id === selectedFrame));
+      button.dataset.index = String(index);
+      if (strip.children[index] !== button) strip.insertBefore(button, strip.children[index] ?? null);
+    });
+    let add = strip.querySelector(".clicksheet-toolbar__add");
+    if (!add) {
+      add = document.createElement("button");
+      add.type = "button";
+      add.className = "clicksheet-toolbar__add";
+      add.textContent = "+ Add screenshot";
+      add.title = "Capture the current page";
+      add.addEventListener("click", () => run({ action: "capture" }));
+    }
+    strip.append(add);
+    add.disabled = busy || !controls.capture;
+    // Show the newest screenshot when a Journey opens (including after a
+    // navigation re-creates the widget) and whenever one is added.
+    const opened = stripJourney !== journey?.id;
+    const grew = frames.length > stripCount && stripCount !== -1;
+    // While recording, the newest screenshot is the one of interest.
+    if (grew && journey?.state === "Recording") selectedFrame = frames.at(-1).id;
+    stripJourney = journey?.id ?? null;
+    stripCount = frames.length;
+    if (opened || grew) requestAnimationFrame(() => { strip.scrollLeft = strip.scrollWidth; updateStripButtons(); });
+    else updateStripButtons();
+  }
+  function createThumb(journey, frame, previewKey) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "clicksheet-toolbar__frame";
+    button.append(document.createElement("span"));
+    button.dataset.previewKey = previewKey;
+    button.dataset.frameId = frame.id;
+    button.dataset.journeyId = journey.id;
+    observer.observe(button);
+    button.addEventListener("click", (event) => {
+      if (suppressClick) { suppressClick = false; event.preventDefault(); return; }
+      selectedFrame = frame.id;
+      render();
+    });
+    button.addEventListener("keydown", (event) => {
+      if ((event.key === "Delete" || event.key === "Backspace") && !action("delete").disabled) { selectedFrame = frame.id; void run({ action: "delete-frame", frameId: frame.id }); }
+    });
+    button.addEventListener("pointerdown", (event) => startReorder(event, button));
+    return button;
+  }
+  function revealSelected() {
+    const button = selectedFrame && thumbs.get(selectedFrame);
+    const strip = role("strip");
+    if (!button) return;
+    // The strip is the thumbnails' offset parent (position: relative).
+    const left = button.offsetLeft;
+    if (left < strip.scrollLeft) strip.scrollLeft = left - 8;
+    else if (left + button.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + button.offsetWidth - strip.clientWidth + 8;
+  }
+  function updateStripButtons() {
+    const strip = role("strip");
+    const overflow = strip.scrollWidth > strip.clientWidth + 1;
+    action("strip-prev").hidden = !overflow;
+    action("strip-next").hidden = !overflow;
+    action("strip-prev").disabled = strip.scrollLeft <= 0;
+    action("strip-next").disabled = strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1;
+  }
+
+  // Reordering with the pointer: a line shows where the screenshot will land,
+  // and the strip scrolls when the pointer nears either edge.
+  let reorder = null;
+  let suppressClick = false;
+  function startReorder(event, button) {
+    if (event.button !== 0 || !view?.editable || busy) return;
+    reorder = { button, pointerId: event.pointerId, startX: event.clientX, x: event.clientX, active: false, gap: null, frame: null };
+    button.setPointerCapture(event.pointerId);
+  }
+  function thumbList() {
+    return [...role("strip").querySelectorAll(".clicksheet-toolbar__frame")];
+  }
+  function gapAt(x) {
+    const list = thumbList();
+    let gap = list.length;
+    for (const [index, item] of list.entries()) {
+      const box = item.getBoundingClientRect();
+      if (x < box.left + box.width / 2) { gap = index; break; }
+    }
+    return gap;
+  }
+  function placeIndicator(gap) {
+    const strip = role("strip");
+    const list = thumbList();
+    let indicator = strip.querySelector(".cs-drop");
+    if (!indicator) { indicator = document.createElement("span"); indicator.className = "cs-drop"; indicator.setAttribute("aria-hidden", "true"); strip.append(indicator); }
+    const stripBox = strip.getBoundingClientRect();
+    const edge = gap < list.length ? list[gap].getBoundingClientRect().left - 5 : list.at(-1).getBoundingClientRect().right + 5;
+    indicator.style.left = `${edge - stripBox.left + strip.scrollLeft - 2}px`;
+  }
+  function autoScroll() {
+    if (!reorder?.active) return;
+    const strip = role("strip");
+    const box = strip.getBoundingClientRect();
+    const speed = reorder.x < box.left + 48 ? -14 : reorder.x > box.right - 48 ? 14 : 0;
+    if (speed) {
+      strip.scrollLeft += speed;
+      reorder.gap = gapAt(reorder.x);
+      placeIndicator(reorder.gap);
+    }
+    reorder.frame = requestAnimationFrame(autoScroll);
+  }
+  function endReorder(commit) {
+    if (!reorder) return;
+    const { button, active, gap, frame } = reorder;
+    cancelAnimationFrame(frame);
+    button.classList.remove("cs-dragging");
+    role("strip").querySelector(".cs-drop")?.remove();
+    reorder = null;
+    if (!active) return;
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+    const from = Number(button.dataset.index);
+    const to = gap > from ? gap - 1 : gap;
+    if (commit && Number.isInteger(to) && to !== from) {
+      selectedFrame = button.dataset.frameId;
+      void run({ action: "move-frame", frameId: button.dataset.frameId, toIndex: to });
+    }
+  }
+  root.addEventListener("pointermove", (event) => {
+    if (!reorder || event.pointerId !== reorder.pointerId) return;
+    reorder.x = event.clientX;
+    if (!reorder.active && Math.abs(event.clientX - reorder.startX) > 6) {
+      reorder.active = true;
+      reorder.button.classList.add("cs-dragging");
+      reorder.frame = requestAnimationFrame(autoScroll);
+    }
+    if (reorder.active) { reorder.gap = gapAt(event.clientX); placeIndicator(reorder.gap); }
+  });
+  root.addEventListener("pointerup", (event) => { if (reorder && event.pointerId === reorder.pointerId) endReorder(true); });
+  root.addEventListener("pointercancel", () => endReorder(false));
+  root.addEventListener("keydown", (event) => { if (event.key === "Escape" && reorder) endReorder(false); });
 
   // The worker reports elapsed time with each view; the toolbar ticks locally
   // between views while Recording.
@@ -296,6 +440,10 @@
       }
       if (command.action === "delete-frame") notice = "Screenshot deleted. Use Undo delete to restore it.";
       if (command.action === "undo-delete") selectedFrame = command.frameId ?? selectedFrame;
+      // Recording is about the page, so the widget shrinks to its controls;
+      // stopping brings back the strip for editing and export.
+      if (command.action === "record" || command.action === "resume") setExpanded(false);
+      if (command.action === "stop") setExpanded(true);
       if (["record", "resume", "capture"].includes(command.action)) {
         selectedFrame = view.currentJourney?.frames.at(-1)?.id ?? selectedFrame;
         const strip = role("strip");
@@ -642,6 +790,121 @@
     button.setAttribute("aria-expanded", String(!menu.hidden));
   }
 
+  // Widget placement. The pill's position is remembered across pages; the
+  // default is the bottom-right corner, clear of top navigation. The panel
+  // opens upwards when the pill sits in the lower half of the viewport.
+  const WIDGET_KEY = "clicksheet-widget";
+  const EDGE = 8;
+  const widget = { x: null, y: null, expanded: true };
+  function placeWidget() {
+    if (root.hidden) return;
+    const pill = root.querySelector(".cs-pill");
+    const pillBox = { width: pill.offsetWidth, height: pill.offsetHeight };
+    const px = Math.min(Math.max(EDGE, widget.x ?? innerWidth - pillBox.width - 24), Math.max(EDGE, innerWidth - pillBox.width - EDGE));
+    const py = Math.min(Math.max(EDGE, widget.y ?? innerHeight - pillBox.height - 24), Math.max(EDGE, innerHeight - pillBox.height - EDGE));
+    const up = py + pillBox.height / 2 > innerHeight / 2;
+    root.dataset.up = String(up);
+    const height = root.offsetHeight;
+    const width = root.offsetWidth;
+    const top = up ? py - (height - pillBox.height) : py;
+    root.style.left = `${Math.min(Math.max(EDGE, px), Math.max(EDGE, innerWidth - width - EDGE))}px`;
+    root.style.top = `${Math.min(Math.max(EDGE, top), Math.max(EDGE, innerHeight - height - EDGE))}px`;
+  }
+  function saveWidget() {
+    void chrome.storage.local.set({ [WIDGET_KEY]: { x: widget.x, y: widget.y, expanded: widget.expanded } }).catch(() => {});
+  }
+  function setExpanded(open, { save = true } = {}) {
+    widget.expanded = open;
+    role("panel").hidden = !open;
+    root.dataset.expanded = String(open);
+    action("expand").setAttribute("aria-expanded", String(open));
+    action("expand").textContent = open ? "▾" : "▴";
+    action("expand").setAttribute("aria-label", open ? "Collapse to the recording controls" : "Show screenshots and editing");
+    action("expand").title = action("expand").getAttribute("aria-label");
+    if (!open) { toggleMenu("export-menu", false); toggleMenu("settings-menu", false); role("library").hidden = true; }
+    placeWidget();
+    if (open) requestAnimationFrame(() => {
+      const strip = role("strip");
+      if (selectedFrame) revealSelected(); else strip.scrollLeft = strip.scrollWidth;
+      updateStripButtons();
+    });
+    if (save) saveWidget();
+  }
+  chrome.storage.local.get(WIDGET_KEY).then((stored) => {
+    Object.assign(widget, stored?.[WIDGET_KEY] ?? {});
+    setExpanded(widget.expanded !== false, { save: false });
+  }, () => setExpanded(true, { save: false }));
+  new ResizeObserver(() => placeWidget()).observe(root);
+  window.addEventListener("resize", () => placeWidget());
+  action("expand").addEventListener("click", () => setExpanded(!widget.expanded));
+
+  // Moving: drag the grip, or focus it and use the arrow keys.
+  let move = null;
+  const grip = action("drag");
+  const pillPosition = () => {
+    const box = root.querySelector(".cs-pill").getBoundingClientRect();
+    return { x: box.left, y: box.top };
+  };
+  grip.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const start = pillPosition();
+    move = { pointerId: event.pointerId, dx: event.clientX - start.x, dy: event.clientY - start.y };
+    grip.setPointerCapture(event.pointerId);
+    root.dataset.moving = "true";
+  });
+  grip.addEventListener("pointermove", (event) => {
+    if (!move || event.pointerId !== move.pointerId) return;
+    widget.x = event.clientX - move.dx;
+    widget.y = event.clientY - move.dy;
+    placeWidget();
+  });
+  const endMove = () => {
+    if (!move) return;
+    move = null;
+    delete root.dataset.moving;
+    Object.assign(widget, pillPosition());
+    saveWidget();
+  };
+  grip.addEventListener("pointerup", endMove);
+  grip.addEventListener("pointercancel", endMove);
+  grip.addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? 64 : 16;
+    const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    const current = pillPosition();
+    widget.x = current.x + delta[0];
+    widget.y = current.y + delta[1];
+    placeWidget();
+    Object.assign(widget, pillPosition());
+    saveWidget();
+  });
+
+  // Strip navigation: arrow buttons and the mouse wheel scroll sideways.
+  const strip = role("strip");
+  action("strip-prev").addEventListener("click", () => strip.scrollBy({ left: -strip.clientWidth * 0.8, behavior: "smooth" }));
+  action("strip-next").addEventListener("click", () => strip.scrollBy({ left: strip.clientWidth * 0.8, behavior: "smooth" }));
+  strip.addEventListener("scroll", () => updateStripButtons(), { passive: true });
+  strip.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.preventDefault();
+    strip.scrollLeft += event.deltaY;
+  }, { passive: false });
+
+  // Chrome assigns suggested shortcuts only on first install, so show which
+  // are really set and offer the page that sets them.
+  async function refreshShortcuts() {
+    const shortcuts = await chrome.runtime.sendMessage({ type: "clicksheet:shortcuts" }).catch(() => ({}));
+    const describe = (key) => key || "not set";
+    role("shortcut-list").textContent = `Capture: ${describe(shortcuts?.capture)} · Show/hide: ${describe(shortcuts?.toggle)}`;
+    action("capture").title = shortcuts?.capture
+      ? `Capture the current page (${shortcuts.capture} keeps hover and focus states)`
+      : "Capture the current page. Set a keyboard shortcut in Settings to keep hover and focus states.";
+  }
+  void refreshShortcuts();
+  action("open-shortcuts").addEventListener("click", () => { void chrome.runtime.sendMessage({ type: "clicksheet:open-shortcuts" }); });
+
   role("name").addEventListener("input", () => {
     renameRevision += 1;
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : "Saving";
@@ -658,7 +921,7 @@
   action("new").addEventListener("click", () => run({ action: "new" }));
   for (const name of ["record", "pause", "resume", "stop", "capture"]) action(name).addEventListener("click", () => run({ action: name }));
   action("export").addEventListener("click", () => { toggleMenu("settings-menu", false); toggleMenu("export-menu"); });
-  action("settings").addEventListener("click", () => { toggleMenu("export-menu", false); toggleMenu("settings-menu"); });
+  action("settings").addEventListener("click", () => { toggleMenu("export-menu", false); toggleMenu("settings-menu"); void refreshShortcuts(); });
   action("copy-image").addEventListener("click", copyImage);
   action("download-image").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "download" }); });
   role("settings-menu").addEventListener("submit", (event) => {
@@ -688,7 +951,7 @@
   // A hidden tab keeps ticking locally; refresh the real elapsed time on return.
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && !root.hidden && !busy) void run({ action: "snapshot" }); });
   const controller = {
-    open() { root.hidden = false; void run({ action: "snapshot" }); },
+    open() { root.hidden = false; placeWidget(); void run({ action: "snapshot" }); },
     close() { root.hidden = true; },
     render(state) { role("message").textContent = state.message; role("state").textContent = "Unavailable"; }
   };
@@ -703,6 +966,11 @@
     if (message?.type === "clicksheet:prepare-capture") {
       prepareCapture().then(respond, () => respond(null));
       return true;
+    }
+    if (message?.type === "clicksheet:toggle") {
+      if (root.hidden) controller.open(); else root.hidden = true;
+      respond(true);
+      return;
     }
     if (message?.type === "clicksheet:ping") {
       respond(true);

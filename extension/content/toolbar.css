@@ -1,50 +1,80 @@
+/* Floating widget (spec 1.2). Rendered inside a closed shadow root, so these
+   rules never reach the page and page rules never reach the widget. */
 #clicksheet-toolbar-root {
-  all: initial; position: fixed; z-index: 2147483647; top: 16px; left: 50%;
-  width: min(1400px, calc(100vw - 32px)); transform: translateX(-50%);
+  all: initial; position: fixed; z-index: 2147483647; left: -9999px; top: -9999px;
+  display: block; width: max-content; max-width: calc(100vw - 16px);
   color: #f5f7fb; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
 #clicksheet-toolbar-root[hidden], #clicksheet-toolbar-root [hidden] { display: none !important; }
 #clicksheet-toolbar-root * { box-sizing: border-box; }
-#clicksheet-toolbar-root .clicksheet-toolbar__surface {
-  display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); gap: 18px;
-  padding: 16px; border: 1px solid #3a404c; border-radius: 18px; background: #1b1e26;
-  box-shadow: 0 18px 42px #0c0f1847;
+#clicksheet-toolbar-root .cs-widget { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+#clicksheet-toolbar-root[data-up="true"] .cs-widget { flex-direction: column-reverse; }
+#clicksheet-toolbar-root[data-expanded="true"] .cs-widget { width: min(760px, calc(100vw - 16px)); }
+
+/* Pill: always visible, compact enough to sit over any corner of a page. */
+#clicksheet-toolbar-root .cs-pill {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  background: #1b1e26; border: 1px solid #3a404c; border-radius: 14px; box-shadow: 0 10px 30px #0c0f1859;
+  transition: opacity .15s;
 }
-#clicksheet-toolbar-root .clicksheet-toolbar__journey { min-width: 0; position: relative; }
-#clicksheet-toolbar-root .clicksheet-toolbar__heading { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__mark { background: #3a83f7; border-radius: 8px; padding: 5px 10px; color: white; font-weight: 800; }
-#clicksheet-toolbar-root input { width: 100%; min-width: 0; background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 7px; font: inherit; }
-#clicksheet-toolbar-root button { border: 1px solid #4e596b; border-radius: 8px; padding: 7px 10px; background: #252a35; color: #eef3ff; font: inherit; cursor: pointer; }
+#clicksheet-toolbar-root[data-recording="true"][data-expanded="false"]:not(:hover):not(:focus-within) .cs-pill { opacity: .82; }
+#clicksheet-toolbar-root .cs-grip { cursor: grab; padding: 4px 6px; border: 0; background: transparent; color: #8d99ad; font-size: 15px; touch-action: none; }
+#clicksheet-toolbar-root[data-moving="true"] .cs-grip { cursor: grabbing; }
+#clicksheet-toolbar-root .clicksheet-toolbar__mark { background: #3a83f7; border-radius: 7px; padding: 3px 8px; color: white; font-weight: 800; }
+#clicksheet-toolbar-root .cs-status { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+#clicksheet-toolbar-root [data-role="state"] { font-weight: 700; color: #73d39b; }
+#clicksheet-toolbar-root[data-recording="true"] [data-role="state"]::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: #ff4d5e; }
+#clicksheet-toolbar-root [data-role="elapsed"] { font-variant-numeric: tabular-nums; color: #eef3ff; }
+#clicksheet-toolbar-root [data-role="count"], #clicksheet-toolbar-root [data-role="save-status"] { color: #b6c6dd; font-size: 12px; }
+#clicksheet-toolbar-root [data-role="elapsed"]:empty, #clicksheet-toolbar-root [data-role="count"]:empty { display: none; }
+#clicksheet-toolbar-root .cs-primary { display: flex; gap: 6px; }
+
+#clicksheet-toolbar-root button { border: 1px solid #4e596b; border-radius: 8px; padding: 6px 10px; background: #252a35; color: #eef3ff; font: inherit; cursor: pointer; }
 #clicksheet-toolbar-root button:disabled { opacity: .5; cursor: default; }
-#clicksheet-toolbar-root button:focus-visible, #clicksheet-toolbar-root input:focus-visible { outline: 2px solid #6ca5ff; outline-offset: 2px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__strip { display: flex; gap: 10px; overflow-x: auto; padding: 3px 3px 10px; min-height: 86px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__frame { flex: 0 0 128px; min-height: 72px; overflow: hidden; }
-#clicksheet-toolbar-root .clicksheet-toolbar__frame[aria-pressed="true"] { border-color: #66a3ff; box-shadow: 0 0 0 2px #3a83f7; }
-#clicksheet-toolbar-root .clicksheet-toolbar__add { flex: 0 0 128px; border-style: dashed; }
-#clicksheet-toolbar-root .clicksheet-toolbar__controls { border-left: 1px solid #424855; padding-left: 18px; min-width: 0; }
-#clicksheet-toolbar-root [data-role="state"] { font-weight: 700; color: #73d39b; margin-right: 12px; }
-#clicksheet-toolbar-root [data-role="save-status"] { color: #b6c6dd; font-size: 12px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-#clicksheet-toolbar-root [data-role="message"] { color: #b6c6dd; font-size: 12px; margin: 8px 0 0; }
-#clicksheet-toolbar-root .clicksheet-toolbar__library { position: absolute; top: 40px; right: 0; z-index: 1; background: #252a35; padding: 12px; border: 1px solid #4e596b; border-radius: 10px; width: min(300px, 100%); max-height: 300px; overflow-y: auto; box-shadow: 0 8px 24px #0008; }
+#clicksheet-toolbar-root button:focus-visible, #clicksheet-toolbar-root input:focus-visible, #clicksheet-toolbar-root select:focus-visible { outline: 2px solid #6ca5ff; outline-offset: 2px; }
+#clicksheet-toolbar-root .cs-icon { padding: 5px 9px; line-height: 1; }
+#clicksheet-toolbar-root [data-action="record"] { background: #b3261e; border-color: #d9443a; }
+#clicksheet-toolbar-root .cs-danger { background: #3a1d20; border-color: #d9443a; color: #ffb4ab; }
+#clicksheet-toolbar-root .cs-danger:not(:disabled):hover { background: #b3261e; color: white; }
+#clicksheet-toolbar-root [data-action="undo"] { border-color: #66a3ff; }
+
+/* A notice stays visible while collapsed; routine status only shows expanded. */
+#clicksheet-toolbar-root .cs-message { margin: 0; padding: 6px 10px; border-radius: 10px; background: #1b1e26e6; color: #b6c6dd; font-size: 12px; max-width: min(520px, calc(100vw - 16px)); }
+#clicksheet-toolbar-root[data-expanded="false"] .cs-message:not([data-notice="true"]) { display: none; }
+#clicksheet-toolbar-root[data-expanded="true"] .cs-message { max-width: none; }
+
+/* Panel: the full editing surface. */
+#clicksheet-toolbar-root .cs-panel {
+  position: relative; display: grid; gap: 10px; padding: 12px;
+  background: #1b1e26; border: 1px solid #3a404c; border-radius: 16px; box-shadow: 0 18px 42px #0c0f1859;
+  grid-template-columns: minmax(0, 1fr); max-height: calc(100vh - 90px); overflow-y: auto;
+}
+#clicksheet-toolbar-root .cs-panel > * { min-width: 0; }
+#clicksheet-toolbar-root .clicksheet-toolbar__heading { display: flex; align-items: center; gap: 8px; }
+#clicksheet-toolbar-root input { flex: 1 1 160px; min-width: 0; background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px 8px; font: inherit; }
+#clicksheet-toolbar-root .clicksheet-toolbar__library { position: absolute; top: 52px; right: 12px; z-index: 1; background: #252a35; padding: 12px; border: 1px solid #4e596b; border-radius: 10px; width: min(300px, calc(100% - 24px)); max-height: 300px; overflow-y: auto; box-shadow: 0 8px 24px #0008; }
 #clicksheet-toolbar-root [data-role="journeys"] { display: grid; gap: 6px; margin-top: 8px; }
 #clicksheet-toolbar-root [aria-current="true"] { border-color: #66a3ff; }
-@media (max-width: 640px) {
-  #clicksheet-toolbar-root .clicksheet-toolbar__surface { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  #clicksheet-toolbar-root .clicksheet-toolbar__controls { border-left: 0; border-top: 1px solid #424855; padding: 10px 0 0; }
-  #clicksheet-toolbar-root .clicksheet-toolbar__heading { flex-wrap: wrap; }
-  #clicksheet-toolbar-root input { flex: 1 1 120px; width: auto; }
-}
-#clicksheet-toolbar-root .clicksheet-toolbar__frame img { display: block; width: 100%; height: 64px; object-fit: contain; margin-bottom: 5px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__frame span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#clicksheet-toolbar-root .clicksheet-toolbar__frame-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+#clicksheet-toolbar-root .cs-strip-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#clicksheet-toolbar-root .clicksheet-toolbar__strip { position: relative; flex: 1 1 auto; min-width: 0; display: flex; gap: 10px; overflow-x: auto; padding: 3px 3px 8px; min-height: 96px; scrollbar-width: thin; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame { flex: 0 0 132px; min-height: 84px; overflow: hidden; padding: 6px; touch-action: pan-y; user-select: none; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame[aria-pressed="true"] { border-color: #66a3ff; box-shadow: 0 0 0 2px #3a83f7; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame.cs-dragging { opacity: .35; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame img { display: block; width: 100%; height: 62px; object-fit: contain; margin-bottom: 5px; pointer-events: none; }
+#clicksheet-toolbar-root .clicksheet-toolbar__frame span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__add { flex: 0 0 132px; border-style: dashed; }
+#clicksheet-toolbar-root .cs-drop { position: absolute; top: 2px; bottom: 8px; width: 4px; border-radius: 2px; background: #6ca5ff; box-shadow: 0 0 0 2px #1b1e26; pointer-events: none; }
+
+#clicksheet-toolbar-root .clicksheet-toolbar__frame-actions, #clicksheet-toolbar-root .clicksheet-toolbar__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 #clicksheet-toolbar-root .clicksheet-toolbar__frame-actions button { padding: 4px 9px; font-size: 12px; }
-#clicksheet-toolbar-root [data-action="undo"] { border-color: #66a3ff; }
-#clicksheet-toolbar-root .clicksheet-toolbar__controls { position: relative; }
-#clicksheet-toolbar-root .clicksheet-toolbar__menu { display: grid; gap: 8px; margin-top: 10px; padding: 12px; background: #252a35; border: 1px solid #4e596b; border-radius: 10px; }
+#clicksheet-toolbar-root .clicksheet-toolbar__menu { display: grid; gap: 8px; padding: 12px; background: #252a35; border: 1px solid #4e596b; border-radius: 10px; }
 #clicksheet-toolbar-root .clicksheet-toolbar__menu label { display: grid; gap: 4px; color: #d7e0ee; font-size: 12px; }
 #clicksheet-toolbar-root .clicksheet-toolbar__menu select { background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px; font: inherit; }
 #clicksheet-toolbar-root .clicksheet-toolbar__menu p { margin: 0; color: #b6c6dd; font-size: 11px; }
-#clicksheet-toolbar-root .clicksheet-toolbar__frame[draggable="true"] { cursor: grab; }
-#clicksheet-toolbar-root [data-role="elapsed"] { font-variant-numeric: tabular-nums; color: #eef3ff; margin-right: 12px; }
-#clicksheet-toolbar-root [data-role="elapsed"]:empty { display: none; }
+#clicksheet-toolbar-root .cs-shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #d7e0ee; font-size: 12px; }
+
+@media (max-width: 520px) {
+  #clicksheet-toolbar-root .cs-pill { flex-wrap: wrap; }
+  #clicksheet-toolbar-root .clicksheet-toolbar__frame, #clicksheet-toolbar-root .clicksheet-toolbar__add { flex-basis: 108px; }
+}

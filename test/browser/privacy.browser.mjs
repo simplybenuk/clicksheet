@@ -9,7 +9,7 @@ export async function run(t) {
 }
 
 async function revealedPassword(t) {
-  const s = await t.launch({ windowSize: "1280,1300" });
+  const s = await t.launch({ windowSize: "1280,1600" });
   const { page, toolbar } = s;
   const { check } = t;
   await s.open();
@@ -59,7 +59,7 @@ async function framesAndComponents(t) {
 
 // Uses the shipped closed shadow root, so nothing here reaches inside it.
 async function closedShadowRoot(t) {
-  const s = await t.launch({ openShadow: false, windowSize: "1280,1300" });
+  const s = await t.launch({ openShadow: false, windowSize: "1280,1600" });
   const { page } = s;
   const { check } = t;
   await page.goto(s.base);

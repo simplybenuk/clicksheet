@@ -145,17 +145,17 @@ test("long text is truncated with an ellipsis", () => {
 
 test("long Journeys shrink the cells to stay within canvas limits", () => {
   const layout = layoutContactSheet(frames(400));
-  assert.ok(layout.imageWidth < 640);
+  assert.ok(layout.imageWidth < 1280);
   assert.ok(layout.imageWidth >= 240);
   assert.ok(layout.height <= MAX_CANVAS_SIDE && layout.width <= MAX_CANVAS_SIDE);
   assert.equal(layout.cells.length, 400);
-  assert.equal(layoutContactSheet(frames(13)).imageWidth, 640);
+  assert.equal(layoutContactSheet(frames(13), { imageWidth: 640 }).imageWidth, 640, "an explicit width is honoured");
 });
 
 test("the area limit is respected too", () => {
   const layout = layoutContactSheet(frames(60), { maxArea: 15_000_000 });
   assert.ok(layout.width * layout.height <= 15_000_000);
-  assert.ok(layout.imageWidth < 640);
+  assert.ok(layout.imageWidth < 1280);
 });
 
 test("Journeys too large even at the smallest cell size fail with guidance", () => {
@@ -171,4 +171,11 @@ test("Journeys too large even at the smallest cell size fail with guidance", () 
 test("empty Journeys cannot be exported", () => {
   assert.throws(() => layoutContactSheet([]), /no screenshots/);
   assert.throws(() => layoutContactSheet(undefined), /no screenshots/);
+});
+
+test("screenshots keep their captured width so zooming shows full detail", () => {
+  assert.equal(layoutContactSheet(frames(20)).imageWidth, 1280, "twenty 1280px captures are not downscaled");
+  assert.equal(layoutContactSheet(frames(6, { width: 2560, height: 1440 })).imageWidth, 1920, "high-density captures are capped");
+  assert.equal(layoutContactSheet(frames(2, { width: 300, height: 200 })).imageWidth, 300);
+  assert.equal(layoutContactSheet([{ id: "old", screenshotFile: "old.png" }]).imageWidth, 640, "frames without size fall back to the default");
 });

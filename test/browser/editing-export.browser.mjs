@@ -45,7 +45,7 @@ export async function run(t) {
   check("full-page capture adds a frame", await s.count(4, 10000));
   let journey = await s.readJourney();
   const full = journey.frames.at(-1);
-  check("full-page frame is taller than the viewport", full.captureArea === "fullPage" && full.image.height > 1000 * 1.5, `${full.captureArea} ${full.image.width}x${full.image.height} viewport ${JSON.stringify(full.viewport)}`);
+  check("full-page frame is taller than the viewport", full.captureArea === "fullPage" && full.image.height > (await page.evaluate(() => innerHeight)) * 1.5, `${full.captureArea} ${full.image.width}x${full.image.height} viewport ${JSON.stringify(full.viewport)}`);
   t.save("fullpage.png", (await s.readImage(journey.id, "screenshots", full.screenshotFile)).dataUrl.split(",")[1]);
   check("page scroll restored after full-page capture", await page.evaluate(() => scrollY) === 0);
 

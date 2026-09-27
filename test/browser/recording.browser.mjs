@@ -2,7 +2,7 @@
 import { until } from "./harness.mjs";
 
 export async function run(t) {
-  const s = await t.launch({ windowSize: "1280,1300" });
+  const s = await t.launch({ windowSize: "1280,1600" });
   const { page, toolbar, frames } = s;
   const { check } = t;
   // Captured data must stay local (FR-001.5): record every request the pages

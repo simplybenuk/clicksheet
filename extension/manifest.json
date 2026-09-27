@@ -23,9 +23,15 @@
   "commands": {
     "capture": {
       "suggested_key": {
-        "default": "Alt+Shift+C"
+        "default": "Alt+Shift+S"
       },
       "description": "Capture the current page into the open Journey"
+    },
+    "toggle": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Show or hide the Clicksheet widget"
     }
   }
 }

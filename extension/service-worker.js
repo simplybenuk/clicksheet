@@ -85,6 +85,19 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     void chrome.runtime.openOptionsPage();
     return;
   }
+  // Chrome only assigns suggested shortcuts on first install, so the widget
+  // shows which are really set and links to the page that sets them.
+  if (message?.type === "clicksheet:shortcuts") {
+    chrome.commands.getAll().then(
+      (commands) => respond(Object.fromEntries(commands.filter((command) => command.name !== "_execute_action").map((command) => [command.name, command.shortcut ?? ""]))),
+      () => respond({})
+    );
+    return true;
+  }
+  if (message?.type === "clicksheet:open-shortcuts") {
+    void chrome.tabs.create({ url: "chrome://extensions/shortcuts", index: (sender.tab?.index ?? -1) + 1 });
+    return;
+  }
   // The editor is an extension page, so the page being recorded can never
   // read the unredacted screenshot it shows.
   if (message?.type === "clicksheet:open-editor") {
@@ -115,6 +128,12 @@ chrome.commands.onCommand.addListener(captureFromShortcut);
 const shortcutCaptures = new Set();
 
 async function captureFromShortcut(command, tab) {
+  if (command === "toggle" && typeof tab?.id === "number") {
+    // Show or hide an open widget; on a page without one, open it.
+    const toggled = await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:toggle" }).catch(() => false);
+    if (!toggled) await openClicksheet(tab);
+    return;
+  }
   if (command !== "capture" || typeof tab?.id !== "number") return;
   // A held or repeated key press should not queue a burst of captures.
   if (shortcutCaptures.has(tab.id)) return;

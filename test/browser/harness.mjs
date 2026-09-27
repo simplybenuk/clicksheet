@@ -136,7 +136,7 @@ export function createScenario(name) {
   return t;
 }
 
-async function launch(t, cleanups, { openShadow = true, windowSize = "1280,1000" } = {}) {
+async function launch(t, cleanups, { openShadow = true, windowSize = "1280,1600" } = {}) {
   const { chromium } = await loadPlaywright();
   const ext = prepareExtension({ openShadow });
   cleanups.push(async () => rmSync(ext, { recursive: true, force: true }));

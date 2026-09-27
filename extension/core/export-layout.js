@@ -7,6 +7,10 @@
 
 export const MAX_COLUMNS = 6;
 export const DEFAULT_IMAGE_WIDTH = 640;
+// Screenshots are drawn at up to their captured width, so zooming into the
+// sheet shows as much detail as the capture holds. Wider captures (high
+// density screens) are capped to keep the file a sensible size.
+export const MAX_IMAGE_WIDTH = 1920;
 export const MIN_IMAGE_WIDTH = 240;
 export const IMAGE_WIDTH_STEP = 40;
 // Full-page captures can be many times taller than wide; beyond this ratio
@@ -53,7 +57,7 @@ export function layoutContactSheet(frames, options = {}) {
   }
 
   const {
-    imageWidth: startWidth = DEFAULT_IMAGE_WIDTH,
+    imageWidth: startWidth = nativeWidth(frames),
     minImageWidth = MIN_IMAGE_WIDTH,
     step = IMAGE_WIDTH_STEP,
     maxSide = MAX_CANVAS_SIDE,
@@ -69,6 +73,12 @@ export function layoutContactSheet(frames, options = {}) {
   }
 
   throw new ExportTooLargeError(tooLargeMessage(frames.length));
+}
+
+function nativeWidth(frames) {
+  const widths = frames.map((frame) => frame?.image?.width).filter((width) => Number.isFinite(width) && width > 0);
+  const widest = widths.length ? Math.max(...widths) : DEFAULT_IMAGE_WIDTH;
+  return Math.max(MIN_IMAGE_WIDTH, Math.min(MAX_IMAGE_WIDTH, Math.round(widest)));
 }
 
 function layoutAt(frames, imageWidth) {

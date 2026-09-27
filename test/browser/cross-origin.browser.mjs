@@ -3,7 +3,7 @@
 import { until } from "./harness.mjs";
 
 export async function run(t) {
-  const s = await t.launch({ windowSize: "1280,1300" });
+  const s = await t.launch({ windowSize: "1280,1600" });
   const { page, toolbar } = s;
   const { check } = t;
   const other = `http://localhost:${await s.serve()}`;
