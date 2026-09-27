@@ -132,6 +132,9 @@ async function captureFromShortcut(command, tab) {
     // Show or hide an open widget; on a page without one, open it.
     const toggled = await chrome.tabs.sendMessage(tab.id, { type: "clicksheet:toggle" }).catch(() => false);
     if (!toggled) await openClicksheet(tab);
+    // Like the icon, the shortcut counts as invoking Clicksheet here, which
+    // resumes a Journey paused by a cross-origin navigation.
+    else await journeys.event(tab.id, { type: "invoked", url: tab.url, windowId: tab.windowId });
     return;
   }
   if (command !== "capture" || typeof tab?.id !== "number") return;

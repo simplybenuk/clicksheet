@@ -144,3 +144,37 @@ test("Undo survives the worker idling out", async () => {
   assert.deepEqual(view.currentJourney.frames.map((frame) => frame.id), [frameId]);
   assert.equal(await (await createStorage(first.volume.root).readScreenshot(id, `${frameId}.png`)).text(), "pixels of /dashboard");
 });
+
+test("an export the browser cannot allocate is retried at smaller widths", async () => {
+  const widths = [];
+  const env = setup({ renderSheet: async (journey, load, options) => {
+    widths.push(options?.imageWidth ?? "native");
+    if (!options || options.imageWidth > 960) throw Object.assign(new Error("canvas refused"), { name: "ExportTooLargeError" });
+    return new Blob(["sheet"], { type: "image/png" });
+  } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  await env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context);
+  const view = await env.coordinator.request(1, { action: "export", journeyId: created.currentJourney.id, destination: "download" });
+  assert.deepEqual(widths, ["native", 1280, 960]);
+  assert.equal(view.exported.fileName, "untitled-journey.png");
+});
+
+test("Copy shrinks a sheet that is too large for a message instead of refusing", async () => {
+  const widths = [];
+  const env = setup({ renderSheet: async (journey, load, options) => {
+    widths.push(options?.imageWidth ?? "native");
+    return new Blob([new Uint8Array(options?.imageWidth === 640 ? 10 : 46 * 1024 * 1024)], { type: "image/png" });
+  } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  await env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context);
+  const view = await env.coordinator.request(1, { action: "export", journeyId: created.currentJourney.id, destination: "copy" });
+  assert.deepEqual(widths, ["native", 1280, 960, 640]);
+  assert.match(view.image, /^data:image\/png;base64,/);
+});
+
+test("a sheet too large at every width still fails with guidance", async () => {
+  const env = setup({ renderSheet: async () => { throw Object.assign(new Error("Delete some screenshots, then export again."), { name: "ExportTooLargeError" }); } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  await env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context);
+  await assert.rejects(env.coordinator.request(1, { action: "export", journeyId: created.currentJourney.id, destination: "download" }), /Delete some screenshots/);
+});

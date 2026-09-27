@@ -19,6 +19,15 @@ export async function run(t) {
   s.worker.on?.("request", watchRequest);
   await s.open();
   await s.newJourney();
+  // Where the widget sits when Record takes the first screenshot: its pill
+  // and expanded panel must not appear in the stored pixels (FR-002.8).
+  const widgetBoxes = await page.evaluate(() => {
+    const shadow = document.querySelector("clicksheet-toolbar").shadowRoot;
+    return [".cs-pill", ".cs-panel"].map((selector) => {
+      const box = shadow.querySelector(selector).getBoundingClientRect();
+      return [box.x + box.width / 2, box.y + box.height / 2];
+    });
+  });
   await toolbar.locator('[data-action="record"]').click();
   const recorded = await s.count(1);
   check("Record creates the initial frame", recorded, recorded ? "" : `message=${await s.message()} state=${await s.state()}`);
@@ -61,10 +70,10 @@ export async function run(t) {
   const journey = await s.readJourney();
   const first = journey.frames[0];
   const scale = first.image.width / first.viewport.width;
-  const image = await s.readImage(journey.id, "screenshots", first.screenshotFile, [[first.viewport.width / 2 * scale, 60 * scale]]);
+  const image = await s.readImage(journey.id, "screenshots", first.screenshotFile, widgetBoxes.map(([x, y]) => [x * scale, y * scale]));
   t.save("frame1.png", image.dataUrl.split(",")[1]);
   check("screenshots are stored as PNG files", image.bytes > 1000 && image.dataUrl.startsWith("data:image/png"), `${image.width}x${image.height}`);
-  check("toolbar is hidden in captured pixels", image.pixels[0] !== "27,30,38", `pixel=${image.pixels[0]}`);
+  check("the widget is hidden in captured pixels", image.pixels.every((pixel) => pixel !== "27,30,38"), `pixels=${image.pixels.join(" | ")}`);
   check("frame metadata has no query or hash", journey.frames.every((f) => !/[?#]/.test(f.pathname)), journey.frames.map((f) => f.pathname).join(" "));
   check("no request left the machine while recording", seen > 0 && external.length === 0, `${seen} requests seen; external: ${external.slice(0, 3).join(" ") || "none"}`);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));

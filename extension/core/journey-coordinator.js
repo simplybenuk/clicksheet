@@ -21,6 +21,8 @@ const REENTRY_REASONS = new Set(["permission", "navigation"]);
 // Any of these ends the one-step Undo window for a deleted screenshot.
 const ENDS_UNDO = new Set(["delete-frame", "move-frame", "redact", "record", "resume", "capture", "stop", "new", "open", "settings"]);
 const CAPTURE_AREAS = new Set(["viewport", "fullPage"]);
+const COPY_LIMIT_BYTES = 45 * 1024 * 1024;
+const EXPORT_FALLBACK_WIDTHS = [1280, 960, 640];
 const QUOTA_ERROR = /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i;
 
 export class CaptureError extends Error {
@@ -60,7 +62,7 @@ export function createJourneyCoordinator({
   gate = createRateGate({ minIntervalMs: 600 }),
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   schedulerOptions = {},
-  renderSheet = (journey, loadImage) => renderContactSheet(journey, { loadImage }),
+  renderSheet = (journey, loadImage, layoutOptions) => renderContactSheet(journey, { loadImage, layoutOptions }),
   decodeImage = (blob) => createImageBitmap(blob),
   stitch = stitchSegments,
   redactImage = applyMasks
@@ -568,10 +570,27 @@ export function createJourneyCoordinator({
         if (!current.frames.length) throw new Error("Export is unavailable because this Journey has no screenshots.");
         if (!["copy", "download"].includes(command.destination)) throw new Error("Choose Copy image or Download image.");
         const storage = createStorage(root);
-        const blob = await renderSheet(prepareJourney(current), async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile)));
+        const load = async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile));
+        const journey = prepareJourney(current);
+        // Full-width screenshots can exceed what Chrome will allocate, or what
+        // a runtime message can carry for Copy (64 MiB, plus a third for
+        // base64). Retry at smaller widths before giving up; nothing is dropped.
+        const limit = command.destination === "copy" ? COPY_LIMIT_BYTES : Infinity;
+        let blob = null;
+        let failure = null;
+        for (const imageWidth of [undefined, ...EXPORT_FALLBACK_WIDTHS]) {
+          try {
+            blob = await renderSheet(journey, load, imageWidth ? { imageWidth } : undefined);
+            failure = null;
+            if (blob.size <= limit) break;
+          } catch (error) {
+            if (error?.name !== "ExportTooLargeError") throw error;
+            failure = error;
+          }
+        }
+        if (failure) throw failure;
         if (command.destination === "copy") {
-          // Runtime messages are capped at 64 MiB; base64 adds a third.
-          if (blob.size > 45 * 1024 * 1024) throw new Error("This contact sheet is too large to copy. Use Download image instead.");
+          if (blob.size > limit) throw new Error("This contact sheet is too large to copy. Use Download image instead.");
           return { ...present(tabId), image: await toDataUrl(blob) };
         }
         const { fileName } = await storage.writeExport(current.id, current.name, blob);

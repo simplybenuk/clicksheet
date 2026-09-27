@@ -229,6 +229,7 @@
   const thumbs = new Map();
   let stripJourney = null;
   let stripCount = -1;
+  let lastRevealKey = "";
   function renderStrip(journey, controls) {
     const strip = role("strip");
     const frames = journey?.frames ?? [];
@@ -272,8 +273,20 @@
     if (grew && journey?.state === "Recording") selectedFrame = frames.at(-1).id;
     stripJourney = journey?.id ?? null;
     stripCount = frames.length;
-    if (opened || grew) requestAnimationFrame(() => { strip.scrollLeft = strip.scrollWidth; updateStripButtons(); });
-    else updateStripButtons();
+    // Scroll only when something the user cares about moved: a Journey opened,
+    // or the selected screenshot changed or changed place (capture, Undo,
+    // Move, drag). Plain refreshes leave the user's own scrolling alone.
+    const selectedIndex = frames.findIndex((frame) => frame.id === selectedFrame);
+    const revealKey = `${journey?.id}:${selectedFrame}:${selectedIndex}`;
+    const reveal = opened || revealKey !== lastRevealKey;
+    lastRevealKey = revealKey;
+    requestAnimationFrame(() => {
+      if (reveal) {
+        if (selectedIndex !== -1) revealSelected();
+        else if (opened || grew) strip.scrollLeft = strip.scrollWidth;
+      }
+      updateStripButtons();
+    });
   }
   function createThumb(journey, frame, previewKey) {
     const button = document.createElement("button");
@@ -299,6 +312,8 @@
     const button = selectedFrame && thumbs.get(selectedFrame);
     const strip = role("strip");
     if (!button) return;
+    // The newest screenshot sits beside the Add card; show both.
+    if (button.nextElementSibling?.classList.contains("clicksheet-toolbar__add")) { strip.scrollLeft = strip.scrollWidth; return; }
     // The strip is the thumbnails' offset parent (position: relative).
     const left = button.offsetLeft;
     if (left < strip.scrollLeft) strip.scrollLeft = left - 8;
@@ -937,7 +952,8 @@
   action("move-left").addEventListener("click", () => moveSelected(-1));
   action("move-right").addEventListener("click", () => moveSelected(1));
   action("delete").addEventListener("click", () => { if (selectedFrame) void run({ action: "delete-frame", frameId: selectedFrame }); });
-  action("undo").addEventListener("click", () => run({ action: "undo-delete" }));
+  // The restored screenshot is selected so the strip brings it into view.
+  action("undo").addEventListener("click", () => run({ action: "undo-delete", frameId: view?.undo?.frameId }));
   action("edit").addEventListener("click", () => {
     if (!selectedFrame || !view?.currentJourney) return;
     void chrome.runtime.sendMessage({ type: "clicksheet:open-editor", journeyId: view.currentJourney.id, frameId: selectedFrame });
@@ -968,7 +984,11 @@
       return true;
     }
     if (message?.type === "clicksheet:toggle") {
-      if (root.hidden) controller.open(); else root.hidden = true;
+      // During a capture the widget is hidden only for the screenshot; toggle
+      // the state it will return to.
+      if (hiddenForCapture !== null) hiddenForCapture = !hiddenForCapture;
+      else if (root.hidden) controller.open();
+      else root.hidden = true;
       respond(true);
       return;
     }
