@@ -1,5 +1,5 @@
 import { createStorage } from "./storage.js";
-import { createThumbnail } from "./thumbnail.js";
+import { createThumbnail, THUMBNAIL_SIZE, VIEWER_SIZE } from "./thumbnail.js";
 import { createLibrarySession } from "./library-session.js";
 import {
   attachInteraction,
@@ -427,12 +427,16 @@ export function createJourneyCoordinator({
     const controls = current ? libraryControls(journeyControls(prepareJourney(current), details), current, tabId, view) : {};
 
     switch (command.action) {
-      case "thumbnail": {
+      case "thumbnail":
+      case "view-frame": {
         if (!view.available || !current || current.id !== command.journeyId) throw new Error("Reconnect storage to load this screenshot.");
         const frame = current.frames.find((item) => item.id === command.frameId);
         if (!frame) throw new Error("Screenshot not found.");
         const file = await createStorage(root).readScreenshot(current.id, frame.screenshotFile);
-        return { thumbnail: await thumbnail(file, frame) };
+        if (command.action === "thumbnail") return { thumbnail: await thumbnail(file, frame, THUMBNAIL_SIZE) };
+        // The viewer shows the stored (already redacted) pixels with the
+        // click marker, larger than a thumbnail.
+        return { image: await thumbnail(file, frame, VIEWER_SIZE), frameId: frame.id };
       }
       case "new": {
         if (!view.editable || (current && !controls.newJourney)) throw new Error("Finish the recording and reconnect storage before creating a Journey.");

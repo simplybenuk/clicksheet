@@ -78,3 +78,20 @@
   #clicksheet-toolbar-root .cs-pill { flex-wrap: wrap; }
   #clicksheet-toolbar-root .clicksheet-toolbar__frame, #clicksheet-toolbar-root .clicksheet-toolbar__add { flex-basis: 108px; }
 }
+
+/* Viewer: one screenshot at a time over a dimmed page. */
+#clicksheet-toolbar-root .cs-viewer {
+  position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column;
+  background: #0b0d12e6; color: #f5f7fb;
+}
+#clicksheet-toolbar-root .cs-viewer__bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; background: #1b1e26; border-bottom: 1px solid #3a404c;
+}
+#clicksheet-toolbar-root .cs-viewer__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; flex: 1 1 240px; }
+#clicksheet-toolbar-root .cs-viewer__nav { display: flex; gap: 6px; }
+#clicksheet-toolbar-root .cs-viewer__stage { flex: 1 1 auto; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+#clicksheet-toolbar-root .cs-viewer__stage img { display: block; max-width: 100%; height: auto; border-radius: 6px; box-shadow: 0 12px 40px #000a; background: white; }
+#clicksheet-toolbar-root .cs-viewer__stage img:not([src]) { display: none; }
+#clicksheet-toolbar-root [data-role="viewer-status"] { color: #b6c6dd; margin: 20px 0 0; }
+#clicksheet-toolbar-root [data-role="viewer-status"]:empty { display: none; }

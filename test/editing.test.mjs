@@ -178,3 +178,18 @@ test("a sheet too large at every width still fails with guidance", async () => {
   await env.coordinator.request(1, { action: "capture", journeyId: created.currentJourney.id }, env.context);
   await assert.rejects(env.coordinator.request(1, { action: "export", journeyId: created.currentJourney.id, destination: "download" }), /Delete some screenshots/);
 });
+
+test("the viewer loads a large preview of one screenshot in the selected Journey", async () => {
+  const sizes = [];
+  const env = setup({ thumbnail: async (file, frame, size) => { sizes.push(size.maxWidth); return `preview:${await file.text()}`; } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  const captured = await env.coordinator.request(1, { action: "capture", journeyId: id }, env.context);
+  const frameId = captured.currentJourney.frames[0].id;
+  const viewed = await env.coordinator.request(1, { action: "view-frame", journeyId: id, frameId });
+  assert.equal(viewed.image, "preview:pixels of /dashboard");
+  assert.equal(viewed.frameId, frameId);
+  await env.coordinator.request(1, { action: "thumbnail", journeyId: id, frameId });
+  assert.deepEqual(sizes, [2000, 240]);
+  await assert.rejects(env.coordinator.request(1, { action: "view-frame", journeyId: id, frameId: "missing" }), /not found/);
+});

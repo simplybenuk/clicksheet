@@ -219,7 +219,11 @@ async function launch(t, cleanups, { openShadow = true, windowSize = "1280,1600"
       const journeys = await (await navigator.storage.getDirectory()).getDirectoryHandle("journeys");
       let latest = null;
       for await (const [, dir] of journeys.entries()) {
-        const journey = JSON.parse(await (await (await dir.getFileHandle("journey.json")).getFile()).text());
+        // The extension may be mid-save (a new folder without journey.json
+        // yet, or a file being replaced); skip it rather than fail the read.
+        let journey;
+        try { journey = JSON.parse(await (await (await dir.getFileHandle("journey.json")).getFile()).text()); }
+        catch { continue; }
         if (latest && journey.updatedAt <= latest.journey.updatedAt) continue;
         const list = async (kind) => {
           const names = [];

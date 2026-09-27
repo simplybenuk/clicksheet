@@ -96,6 +96,32 @@ export async function run(t) {
   const moving = await until(stripState, (state) => state.inView, 3000);
   check("Move right keeps the selected screenshot in view", moving.inView, JSON.stringify(moving));
 
+  // Viewer: View opens the selected screenshot; arrows move through the
+  // Journey; Esc, the backdrop, and double-click behave as expected.
+  const viewer = () => page.evaluate(() => {
+    const shadow = document.querySelector("clicksheet-toolbar").shadowRoot;
+    const dialog = shadow.querySelector('[data-role="viewer"]');
+    const image = shadow.querySelector('[data-role="viewer-image"]');
+    return { open: !dialog.hidden, title: shadow.querySelector('[data-role="viewer-title"]').textContent, width: image.naturalWidth, focused: shadow.activeElement?.dataset.action ?? null };
+  });
+  await frames.nth(2).click();
+  await toolbar.locator('[data-action="view"]').click();
+  const opened = await until(viewer, (state) => state.open && state.width > 0, 5000);
+  check("View opens the selected screenshot at full size", opened.open && opened.width >= 1000 && opened.title.startsWith("3 of 11"), JSON.stringify(opened));
+  check("the viewer takes keyboard focus", opened.focused === "viewer-close", opened.focused);
+  await page.keyboard.press("ArrowRight");
+  const stepped = await until(viewer, (state) => state.title.startsWith("4 of 11") && state.width > 0, 5000);
+  check("the right arrow shows the next screenshot", stepped.title.startsWith("4 of 11"), stepped.title);
+  await page.keyboard.press("Escape");
+  check("Esc closes the viewer", !(await viewer()).open);
+  const selectedAfter = await toolbar.locator('.clicksheet-toolbar__frame[aria-pressed="true"]').getAttribute("data-frame-id");
+  check("the strip selection follows the viewer", selectedAfter === (await frames.nth(3).getAttribute("data-frame-id")));
+  await frames.nth(0).dblclick();
+  const doubled = await until(viewer, (state) => state.open && state.width > 0, 5000);
+  check("double-clicking a thumbnail opens the viewer", doubled.open && doubled.title.startsWith("1 of 11"), doubled.title);
+  await page.mouse.click(5, 300);
+  check("clicking the backdrop closes the viewer", !(await viewer()).open);
+
   // A notice stays visible while collapsed.
   await toolbar.locator('[data-action="export"]').click();
   await toolbar.locator('[data-action="download-image"]').click();
@@ -104,8 +130,9 @@ export async function run(t) {
   check("a notice stays visible while collapsed", !(await inner(".cs-panel"))?.visible && (await inner('[data-role="message"]'))?.visible === true);
 
   // The grip moves the widget with the arrow keys.
+  // Click the grip with the mouse, as a person would, then use the keys.
+  await toolbar.locator('[data-action="drag"]').click();
   const start = await inner(".cs-pill");
-  await toolbar.locator('[data-action="drag"]').focus();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowUp");
   const nudged = await inner(".cs-pill");

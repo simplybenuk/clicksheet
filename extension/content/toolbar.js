@@ -69,6 +69,7 @@
         <div class="clicksheet-toolbar__frame-actions" data-role="frame-actions">
           <button type="button" data-action="move-left" disabled>Move left</button>
           <button type="button" data-action="move-right" disabled>Move right</button>
+          <button type="button" data-action="view" disabled title="View the selected screenshot (or double-click a thumbnail)">View</button>
           <button type="button" data-action="edit" disabled>Redact…</button>
           <button type="button" class="cs-danger" data-action="delete" disabled>Delete</button>
           <button type="button" data-action="undo" hidden>Undo delete</button>
@@ -100,6 +101,21 @@
           </div>
           <p>Screenshots stay in the folder you chose on this device. They can still show sensitive details you did not redact.</p>
         </form>
+      </div>
+    </div>
+    <div class="cs-viewer" data-role="viewer" role="dialog" aria-modal="true" aria-label="Screenshot viewer" hidden>
+      <div class="cs-viewer__bar">
+        <span class="cs-viewer__title" data-role="viewer-title"></span>
+        <span class="cs-viewer__nav">
+          <button type="button" data-action="viewer-prev" aria-label="Previous screenshot">‹ Previous</button>
+          <button type="button" data-action="viewer-next" aria-label="Next screenshot">Next ›</button>
+          <button type="button" data-action="viewer-redact">Redact…</button>
+          <button type="button" class="cs-icon" data-action="viewer-close" aria-label="Close viewer" title="Close (Esc)">✕</button>
+        </span>
+      </div>
+      <div class="cs-viewer__stage" data-role="viewer-stage">
+        <img data-role="viewer-image" alt="">
+        <p data-role="viewer-status" aria-live="polite"></p>
       </div>
     </div>`;
   shadow.append(root);
@@ -210,6 +226,7 @@
     action("move-left").disabled = !editable || selectedIndex === 0;
     action("move-right").disabled = !editable || selectedIndex === frames.length - 1;
     action("edit").disabled = !editable;
+    action("view").disabled = busy || selectedIndex === -1 || !view?.available;
     action("delete").disabled = !editable;
     action("undo").hidden = !view?.undo;
     action("undo").disabled = busy || !view?.editable;
@@ -306,6 +323,7 @@
       if ((event.key === "Delete" || event.key === "Backspace") && !action("delete").disabled) { selectedFrame = frame.id; void run({ action: "delete-frame", frameId: frame.id }); }
     });
     button.addEventListener("pointerdown", (event) => startReorder(event, button));
+    button.addEventListener("dblclick", () => openViewer(frame.id));
     return button;
   }
   function revealSelected() {
@@ -862,7 +880,10 @@
   };
   grip.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    // preventDefault stops text selection while dragging, but also the
+    // default focus; focus explicitly so the arrow keys work after a click.
     event.preventDefault();
+    grip.focus();
     const start = pillPosition();
     move = { pointerId: event.pointerId, dx: event.clientX - start.x, dy: event.clientY - start.y };
     grip.setPointerCapture(event.pointerId);
@@ -919,6 +940,94 @@
   }
   void refreshShortcuts();
   action("open-shortcuts").addEventListener("click", () => { void chrome.runtime.sendMessage({ type: "clicksheet:open-shortcuts" }); });
+
+  // Viewer: a modal for looking at one screenshot at a time, with the click
+  // marker, moving through the Journey with the buttons or arrow keys.
+  const viewerImages = new Map();
+  let viewerFrame = null;
+  let viewerReturn = null;
+  function viewerFrames() {
+    return view?.currentJourney?.frames ?? [];
+  }
+  function openViewer(frameId) {
+    if (!frameId || !view?.available) return;
+    viewerReturn = shadow.activeElement;
+    role("viewer").hidden = false;
+    showViewerFrame(frameId);
+    action("viewer-close").focus();
+  }
+  function closeViewer() {
+    if (role("viewer").hidden) return;
+    role("viewer").hidden = true;
+    viewerFrame = null;
+    role("viewer-image").removeAttribute("src");
+    (thumbs.get(selectedFrame) ?? viewerReturn)?.focus?.();
+  }
+  async function showViewerFrame(frameId) {
+    const frames = viewerFrames();
+    const index = frames.findIndex((frame) => frame.id === frameId);
+    if (index === -1) { closeViewer(); return; }
+    const frame = frames[index];
+    viewerFrame = frame.id;
+    selectedFrame = frame.id;
+    render();
+    role("viewer-title").textContent = [`${index + 1} of ${frames.length}`, frameLabel(frame), frame.title, frame.pathname].filter(Boolean).join(" · ");
+    action("viewer-prev").disabled = index === 0;
+    action("viewer-next").disabled = index === frames.length - 1;
+    action("viewer-redact").disabled = !view?.editable;
+    const key = `${view.currentJourney.id}:${frame.screenshotFile}`;
+    const image = role("viewer-image");
+    if (!viewerImages.has(key)) {
+      image.removeAttribute("src");
+      role("viewer-status").textContent = "Loading…";
+      const result = await chrome.runtime.sendMessage({ type: "clicksheet:journey", command: { action: "view-frame", journeyId: view.currentJourney.id, frameId: frame.id } }).catch(() => null);
+      if (result?.ok && result.view?.image?.startsWith("data:image/png;base64,")) {
+        viewerImages.set(key, result.view.image);
+        // Large previews: keep only a few.
+        while (viewerImages.size > 6) viewerImages.delete(viewerImages.keys().next().value);
+      }
+    }
+    if (viewerFrame !== frame.id) return;
+    if (viewerImages.has(key)) {
+      image.src = viewerImages.get(key);
+      image.alt = `Screenshot ${index + 1}: ${frameLabel(frame)}`;
+      role("viewer-status").textContent = "";
+      role("viewer-stage").scrollTo(0, 0);
+    } else {
+      role("viewer-status").textContent = "This screenshot could not be loaded. Reconnect storage and try again.";
+    }
+  }
+  function stepViewer(offset) {
+    const frames = viewerFrames();
+    const index = frames.findIndex((frame) => frame.id === viewerFrame);
+    const next = frames[index + offset];
+    if (next) void showViewerFrame(next.id);
+  }
+  action("view").addEventListener("click", () => openViewer(selectedFrame));
+  action("viewer-prev").addEventListener("click", () => stepViewer(-1));
+  action("viewer-next").addEventListener("click", () => stepViewer(1));
+  action("viewer-close").addEventListener("click", closeViewer);
+  action("viewer-redact").addEventListener("click", () => {
+    if (!viewerFrame || !view?.currentJourney) return;
+    void chrome.runtime.sendMessage({ type: "clicksheet:open-editor", journeyId: view.currentJourney.id, frameId: viewerFrame });
+    closeViewer();
+  });
+  // A click on the dark backdrop (not the image or controls) closes it.
+  role("viewer").addEventListener("click", (event) => {
+    if (event.target === role("viewer") || event.target === role("viewer-stage")) closeViewer();
+  });
+  role("viewer").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); closeViewer(); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); stepViewer(-1); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); stepViewer(1); }
+    else if (event.key === "Tab") {
+      // Keep keyboard focus inside the dialog.
+      const controls = [...role("viewer").querySelectorAll("button:not(:disabled)")];
+      const at = controls.indexOf(shadow.activeElement);
+      if (event.shiftKey && at <= 0) { event.preventDefault(); controls.at(-1).focus(); }
+      else if (!event.shiftKey && at === controls.length - 1) { event.preventDefault(); controls[0].focus(); }
+    }
+  });
 
   role("name").addEventListener("input", () => {
     renameRevision += 1;
