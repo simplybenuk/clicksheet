@@ -20,6 +20,7 @@
       <p class="eyebrow">Clicksheet browser fixture</p>
       <h1>Supported page</h1>
       <p class="lede">A small local page for loading the extension and exercising future journey-capture scenarios.</p>
+      <p class="eyebrow" aria-live="off">Ambient clock: <span data-role="clock">0</span></p>
 
       <section class="fixture-card" id="overview" aria-labelledby="overview-title">
         <div>
@@ -30,13 +31,33 @@
         <button type="button" data-action="load-details">Load details</button>
       </section>
 
+      <section class="fixture-card" id="navigation" aria-labelledby="navigation-title">
+        <div>
+          <p class="eyebrow">Capture qualification</p>
+          <h2 id="navigation-title">Navigation and no-op clicks</h2>
+          <p data-role="route" aria-live="polite">Route: overview</p>
+        </div>
+        <div class="fixture-actions">
+          <button type="button" data-action="noop">Does nothing</button>
+          <a href="/users" data-action="route">Show users</a>
+          <a href="/second.html" data-action="navigate">Open second page</a>
+          <button type="button" data-action="save-and-go">Save and continue</button>
+          <button type="button" data-action="next-page">Next page</button>
+          <span data-role="page-list">Page 1</span>
+          <button type="button" data-action="refresh-status">Refresh status</button>
+          <span data-role="sync-status">Not synced</span>
+          <span class="hover-card" data-role="hover-card">Hover state</span>
+        </div>
+      </section>
+
       <section class="fixture-card" id="settings" aria-labelledby="settings-title">
         <p class="eyebrow">Sensitive-field fixture</p>
         <h2 id="settings-title">Account settings</h2>
         <label>
           Password
-          <input type="password" value="fixture-secret" autocomplete="current-password">
+          <input type="password" value="fixture-secret" data-role="password">
         </label>
+        <button type="button" data-action="reveal-password">Show password</button>
       </section>
     </main>
   </body>

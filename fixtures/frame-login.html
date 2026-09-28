@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Framed sign-in form</title>
+    <link rel="stylesheet" href="/fixture.css">
+  </head>
+  <body style="margin: 12px; background: white;">
+    <label>Framed password <input type="password" value="framed-secret" data-role="password"></label>
+    <button type="button" data-action="reveal">Show</button>
+    <script>
+      const input = document.querySelector('[data-role="password"]');
+      document.querySelector('[data-action="reveal"]').addEventListener("click", () => {
+        input.type = input.type === "password" ? "text" : "password";
+      });
+    </script>
+  </body>
+</html>

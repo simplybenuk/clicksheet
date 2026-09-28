@@ -14,7 +14,8 @@ const contentTypes = {
 
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-  const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
+  // Extensionless paths are in-page routes (pushState), so they serve the app.
+  const relativePath = requestUrl.pathname === "/" || !extname(requestUrl.pathname) ? "index.html" : requestUrl.pathname.slice(1);
   const filePath = resolve(fixtureRoot, relativePath);
   const fixturePrefix = `${fixtureRoot}${sep}`;
 

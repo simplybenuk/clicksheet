@@ -12,7 +12,8 @@ test("the extension manifest uses temporary active-tab access", () => {
   const manifest = JSON.parse(read("extension/manifest.json"));
 
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ["activeTab", "scripting"]);
+  // `storage` holds per-session tab bindings; it adds no install warning.
+  assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "storage"]);
   assert.equal("host_permissions" in manifest, false);
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, "module");

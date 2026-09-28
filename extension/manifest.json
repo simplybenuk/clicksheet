@@ -6,7 +6,8 @@
   "minimum_chrome_version": "120",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "action": {
     "default_title": "Open Clicksheet"
@@ -18,5 +19,19 @@
   "options_ui": {
     "page": "pages/storage.html",
     "open_in_tab": true
+  },
+  "commands": {
+    "capture": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Capture the current page into the open Journey"
+    },
+    "toggle": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Show or hide the Clicksheet widget"
+    }
   }
 }

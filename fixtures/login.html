@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clicksheet login fixture</title>
+    <link rel="stylesheet" href="/fixture.css">
+    <script type="module" src="/login.js"></script>
+  </head>
+  <body data-fixture-page="login">
+    <header class="site-header">
+      <a class="brand" href="/">Northstar Admin</a>
+    </header>
+    <main class="page-shell">
+      <p class="eyebrow">Sensitive-field fixture</p>
+      <h1>Sign in</h1>
+      <p class="lede">Password fields inside a same-origin frame and inside a web component, each with a show-password toggle.</p>
+      <section class="fixture-card">
+        <iframe src="/frame-login.html" title="Framed sign-in form" data-role="login-frame" width="420" height="120"></iframe>
+      </section>
+      <section class="fixture-card">
+        <fixture-login></fixture-login>
+      </section>
+    </main>
+  </body>
+</html>

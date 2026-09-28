@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clicksheet redaction editor</title>
+    <link rel="stylesheet" href="editor.css">
+  </head>
+  <body>
+    <main class="editor">
+      <header class="editor__bar">
+        <div class="editor__title">
+          <h1>Redact screenshot</h1>
+          <p data-role="subtitle">Loading screenshot…</p>
+        </div>
+        <div class="editor__actions">
+          <button type="button" data-action="delete" aria-label="Delete selected mask" disabled>Delete mask</button>
+          <button type="button" data-action="cancel" aria-label="Cancel and close the editor">Cancel</button>
+          <button type="button" class="primary" data-action="apply" aria-label="Apply redactions to the stored screenshot" disabled>Apply redactions</button>
+        </div>
+      </header>
+      <p class="editor__note">
+        Drag on the screenshot to draw boxes. Select a box to move, resize, or delete it.
+        Applying permanently removes the covered pixels from the stored screenshot.
+      </p>
+      <p class="editor__status" data-role="status" role="status" aria-live="polite"></p>
+      <div class="editor__stage" data-role="stage">
+        <canvas data-role="canvas" tabindex="0" aria-label="Screenshot. Drag to draw a redaction box. Arrow keys move the selected box; Delete removes it." hidden></canvas>
+      </div>
+    </main>
+    <script type="module" src="editor.js"></script>
+  </body>
+</html>

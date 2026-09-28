@@ -56,3 +56,20 @@ export function createCaptureScheduler({
     get hasPending() { return pending !== null; }
   };
 }
+
+// Every capture path (initial, automatic, manual, re-entry) passes through one
+// gate so the extension as a whole stays under Chrome's two-per-second limit.
+export function createRateGate({ minIntervalMs = 500, now = () => performance.now(), sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {}) {
+  let tail = Promise.resolve();
+  let last = -Infinity;
+  return function gate(task) {
+    const run = tail.then(async () => {
+      const wait = last + minIntervalMs - now();
+      if (wait > 0) await sleep(wait);
+      last = now();
+      return task();
+    });
+    tail = run.catch(() => {});
+    return run;
+  };
+}

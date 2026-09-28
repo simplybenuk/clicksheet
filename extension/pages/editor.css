@@ -1,0 +1,134 @@
+:root {
+  color-scheme: dark;
+  --surface: #11151c;
+  --panel: #1a2029;
+  --border: rgba(255, 255, 255, 0.1);
+  --text: #f4f7fb;
+  --muted: #9aa6b8;
+  --accent: #3a83f7;
+  --ok: #73d39b;
+  --warn: #ffbe72;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text);
+  font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 14px 18px;
+}
+
+.editor__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor__title {
+  min-width: 0;
+}
+
+.editor__title h1 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.editor__title p,
+.editor__note {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.editor__note {
+  font-size: 13px;
+}
+
+.editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.editor__status {
+  margin: 0;
+  min-height: 1.5em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.editor__status[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.editor__status[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.editor__stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+canvas {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+canvas:focus-visible {
+  outline: 2px solid #6ca5ff;
+  outline-offset: 2px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: #232b36;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+button:hover,
+button:focus-visible {
+  border-color: #6ca5ff;
+  outline: none;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
