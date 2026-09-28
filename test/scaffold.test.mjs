@@ -21,6 +21,20 @@ test("the extension manifest uses temporary active-tab access", () => {
   assert.deepEqual(manifest.options_ui, { page: "pages/storage.html", open_in_tab: true });
 });
 
+test("every icon the manifest names exists at its declared size", () => {
+  const manifest = JSON.parse(read("extension/manifest.json"));
+  const icons = [...Object.entries(manifest.icons), ...Object.entries(manifest.action.default_icon)];
+
+  // The Chrome Web Store requires a 128px icon in the package.
+  assert.equal(manifest.icons["128"], "icons/icon-128.png");
+
+  for (const [size, path] of icons) {
+    const png = readFileSync(resolve(projectRoot, "extension", path));
+    assert.equal(png.readUInt32BE(16), Number(size), `${path} width`);
+    assert.equal(png.readUInt32BE(20), Number(size), `${path} height`);
+  }
+});
+
 test("supported-page classification accepts standard web pages only", () => {
   assert.deepEqual(classifyPage("https://example.test/dashboard"), {
     supported: true,
@@ -61,4 +75,5 @@ test("the build output contains a loadable extension package", () => {
   assert.equal(existsSync(resolve(projectRoot, "dist/content/toolbar.css")), true);
   assert.equal(existsSync(resolve(projectRoot, "dist/pages/storage.html")), true);
   assert.equal(existsSync(resolve(projectRoot, "dist/core/storage.js")), true);
+  assert.equal(existsSync(resolve(projectRoot, "dist/icons/icon-128.png")), true);
 });
