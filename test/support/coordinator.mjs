@@ -1,6 +1,7 @@
 import { createJourneyCoordinator, memoryBindings } from "../../extension/core/journey-coordinator.js";
 import { createLibrarySession } from "../../extension/core/library-session.js";
 import { createStorage } from "../../extension/core/storage.js";
+import { createExportSettings, memoryStorageArea } from "../../extension/core/export-settings.js";
 import { createVolume } from "./memory-fs.mjs";
 
 export const ORIGIN = "https://app.example.test";
@@ -36,7 +37,7 @@ export function fakeBrowser() {
     calls: [],
     visible: true,
     captureError: null,
-    page: { title: "Dashboard", pathname: "/dashboard", viewport: { width: 100, height: 50, scrollX: 0, scrollY: 0, devicePixelRatio: 2 }, masks: [{ x: 1, y: 2, width: 3, height: 4 }] },
+    page: { title: "Dashboard", origin: ORIGIN, pathname: "/dashboard", viewport: { width: 100, height: 50, scrollX: 0, scrollY: 0, devicePixelRatio: 2 }, masks: [{ x: 1, y: 2, width: 3, height: 4 }] },
     isVisible: async () => browser.visible,
     prepare: async (tabId) => { browser.calls.push(["prepare", tabId]); return structuredClone(browser.page); },
     restore: async (tabId) => { browser.calls.push(["restore", tabId]); },
@@ -54,6 +55,30 @@ export function fakeBrowser() {
     notify: async (tabId) => { browser.calls.push(["notify", tabId]); }
   };
   return browser;
+}
+
+// Stands in for chrome.downloads: records what was saved and names files
+// like Chrome's uniquify would.
+export function fakeDownloads() {
+  const saved = [];
+  const taken = new Set();
+  const unique = (name, extension) => {
+    let candidate = `${name}${extension}`;
+    for (let n = 1; taken.has(candidate); n++) candidate = `${name} (${n})${extension}`;
+    taken.add(candidate);
+    return candidate;
+  };
+  return {
+    saved,
+    fail: null,
+    async save({ name, image, context }) {
+      const fileName = unique(name, ".png");
+      if (this.fail) throw new Error(this.fail);
+      const contextFileName = unique(fileName.replace(/\.png$/, ""), ".json");
+      saved.push({ fileName, contextFileName, image: await image.text(), context: JSON.parse(await context.text()) });
+      return { downloadId: saved.length, fileName, contextFileName };
+    }
+  };
 }
 
 export function setup({ bindings = memoryBindings(), volume = createVolume(), browser = fakeBrowser(), ...overrides } = {}) {
@@ -77,6 +102,9 @@ export function setup({ bindings = memoryBindings(), volume = createVolume(), br
       return new Blob([`sheet:${images.join("|")}`], { type: "image/png" });
     },
     decodeImage: async (blob) => blob.text(),
+    downloads: fakeDownloads(),
+    exportSettings: createExportSettings(memoryStorageArea()),
+    version: "test",
     ...overrides
   };
   const coordinator = createJourneyCoordinator(options);

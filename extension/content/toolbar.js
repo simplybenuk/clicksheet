@@ -51,6 +51,10 @@
         <button type="button" class="cs-icon" data-action="dismiss" aria-label="Hide Clicksheet" title="Hide (click the Clicksheet icon to bring it back)">✕</button>
       </div>
       <p data-role="message" class="cs-message" aria-live="polite">Connecting to your local library…</p>
+      <div class="cs-export-bar" data-role="export-bar" hidden>
+        <iframe data-role="export-bar-frame" title="Saved export: Open or Show in folder"></iframe>
+        <button type="button" class="cs-icon" data-action="dismiss-export" aria-label="Close the saved export bar" title="Close">✕</button>
+      </div>
       <div class="cs-panel" data-role="panel" hidden>
         <div class="clicksheet-toolbar__heading">
           <input data-role="name" aria-label="Journey name" placeholder="Choose or create a Journey">
@@ -86,7 +90,8 @@
         </div>
         <div class="clicksheet-toolbar__menu" data-role="export-menu" hidden>
           <button type="button" data-action="copy-image">Copy image</button>
-          <button type="button" data-action="download-image">Download image</button>
+          <button type="button" data-action="copy-context">Copy context</button>
+          <button type="button" data-action="save-export">Save image and context</button>
         </div>
         <form class="clicksheet-toolbar__menu" data-role="settings-menu" hidden>
           <label>Capture area
@@ -99,6 +104,12 @@
             <input data-role="capture-delay" type="number" min="0" max="10000" step="50" inputmode="numeric">
           </label>
           <button type="submit" data-action="save-settings">Save settings</button>
+          <label>Export to
+            <select data-role="export-destination">
+              <option value="downloads">Downloads (Clicksheet folder)</option>
+              <option value="library">Clicksheet folder › exports</option>
+            </select>
+          </label>
           <div class="cs-shortcuts">
             <span>Keyboard shortcuts</span>
             <span data-role="shortcut-list">Checking…</span>
@@ -246,6 +257,11 @@
       role("capture-delay").value = String(journey.settings?.captureDelayMs ?? 500);
     }
     action("save-settings").disabled = busy || !journey || !view?.editable;
+    // Applies to every Journey, so it saves on change rather than with the
+    // Journey's capture settings.
+    if (shadow.activeElement !== role("export-destination")) role("export-destination").value = view?.exportDestination ?? "downloads";
+    role("export-destination").disabled = busy || !view;
+    renderExportBar();
     renderStrip(journey, controls);
     root.dataset.recording = String(journey?.state === "Recording");
     role("count").textContent = journey?.frames.length ? `${journey.frames.length} shot${journey.frames.length === 1 ? "" : "s"}` : "";
@@ -486,9 +502,18 @@
     saveFailed = false;
     savedRevision = Math.max(savedRevision, revision);
   }
+  // A click that lands while a background refresh runs (the window regains
+  // focus as the click arrives, for example after using the export bar) is run
+  // straight after it rather than dropped.
+  let runningAction = null;
+  let queuedCommand = null;
   async function run(command) {
-    if (busy) return;
+    if (busy) {
+      if (runningAction === "snapshot" && command.action !== "snapshot") queuedCommand = command;
+      return;
+    }
     busy = true;
+    runningAction = command.action;
     if (command.action !== "snapshot") notice = "";
     let failure = null;
     render();
@@ -516,9 +541,14 @@
     } catch (error) { failure = error; }
     finally {
       busy = false;
+      runningAction = null;
       if (failure) notice = failure.message;
       render();
-      if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
+      if (queuedCommand) {
+        const next = queuedCommand;
+        queuedCommand = null;
+        void run(next);
+      } else if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
     }
   }
 
@@ -622,6 +652,20 @@
   // paragraphs or editors is page content that a later redaction could not
   // remove from the export, so those targets are labelled just "Click".
   const TEXT_NAMED = "a[href], button, summary, label, [role='button'], [role='link'], [role='tab'], [role='menuitem'], [role='option'], [role='checkbox']";
+  // The ARIA role an agent would see: explicit, or implied by the element.
+  // Only common implicit roles are mapped; anything else is null.
+  const IMPLICIT_ROLES = [
+    ["a[href], area[href]", "link"], ["button, summary, input[type='button'], input[type='submit'], input[type='reset'], input[type='image']", "button"],
+    ["input[type='checkbox']", "checkbox"], ["input[type='radio']", "radio"], ["input[type='range']", "slider"],
+    ["select", "combobox"], ["textarea, input:not([type]), input[type='text'], input[type='email'], input[type='tel'], input[type='url'], input[type='password']", "textbox"],
+    ["input[type='search']", "searchbox"], ["input[type='number']", "spinbutton"],
+    ["option", "option"], ["img[alt]:not([alt=''])", "img"]
+  ];
+  function targetRole(element) {
+    const explicit = element.getAttribute("role")?.trim().split(/\s+/)[0];
+    if (explicit) return explicit.slice(0, 40);
+    return IMPLICIT_ROLES.find(([selector]) => element.matches(selector))?.[1] ?? null;
+  }
   function describeTarget(element) {
     if (!element.matches(INTERACTIVE) || element.isContentEditable) return "";
     const clean = (text) => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
@@ -646,6 +690,9 @@
         scrollX: window.scrollX,
         scrollY: window.scrollY,
         label: describeTarget(element),
+        role: targetRole(element),
+        tag: element.localName,
+        origin: location.origin,
         pathname: location.pathname
       }
     });
@@ -777,6 +824,7 @@
     const page = document.scrollingElement ?? document.documentElement;
     return {
       title: document.title,
+      origin: location.origin,
       pathname: location.pathname,
       viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY, devicePixelRatio },
       scrollWidth: page.scrollWidth,
@@ -827,6 +875,38 @@
     for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
     return new Blob([bytes], { type: "image/png" });
   }
+  // The bar is an extension page (see pages/export-bar.js); it is reloaded
+  // for each new download so it never shows an older file.
+  function renderExportBar() {
+    const saved = view?.lastExport;
+    role("export-bar").hidden = !saved;
+    if (!saved) return;
+    const frame = role("export-bar-frame");
+    if (frame.dataset.downloadId !== String(saved.downloadId)) {
+      frame.dataset.downloadId = String(saved.downloadId);
+      frame.src = chrome.runtime.getURL(`pages/export-bar.html?download=${encodeURIComponent(saved.downloadId)}`);
+    }
+  }
+  function copyContext() {
+    if (busy) return;
+    toggleMenu("export-menu", false);
+    busy = true;
+    notice = "Preparing the context…";
+    render();
+    const text = request({ action: "export", destination: "context" }).then((result) => new Blob([result.context], { type: "text/plain" }));
+    let copied;
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("unsupported");
+      copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]);
+    } catch (error) {
+      copied = Promise.reject(error);
+    }
+    Promise.allSettled([text, copied]).then(([context, clipboard]) => {
+      if (context.status === "rejected") notice = context.reason.message;
+      else if (clipboard.status === "rejected") notice = "The context could not be copied on this page. Use Save image and context instead.";
+      else notice = "Copied the step context as JSON. Paste it next to the contact sheet.";
+    }).finally(() => { busy = false; render(); });
+  }
   function copyImage() {
     if (busy) return;
     toggleMenu("export-menu", false);
@@ -843,7 +923,7 @@
     }
     Promise.allSettled([rendered, copied]).then(([image, clipboard]) => {
       if (image.status === "rejected") notice = image.reason.message;
-      else if (clipboard.status === "rejected") notice = "The image could not be copied on this page. Use Download image instead.";
+      else if (clipboard.status === "rejected") notice = "The image could not be copied on this page. Use Save image and context instead.";
       else notice = "Copied the contact sheet. Paste it into your agent or issue.";
     }).finally(() => { busy = false; render(); });
   }
@@ -1087,7 +1167,10 @@
   action("export").addEventListener("click", () => { toggleMenu("settings-menu", false); toggleMenu("export-menu"); });
   action("settings").addEventListener("click", () => { toggleMenu("export-menu", false); toggleMenu("settings-menu"); void refreshShortcuts(); });
   action("copy-image").addEventListener("click", copyImage);
-  action("download-image").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "download" }); });
+  action("copy-context").addEventListener("click", copyContext);
+  action("save-export").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "save" }); });
+  action("dismiss-export").addEventListener("click", () => void run({ action: "dismiss-export" }));
+  role("export-destination").addEventListener("change", () => void run({ action: "export-settings", destination: role("export-destination").value }));
   role("settings-menu").addEventListener("submit", (event) => {
     event.preventDefault();
     toggleMenu("settings-menu", false);

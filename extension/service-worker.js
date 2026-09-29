@@ -1,5 +1,6 @@
 import { loadRootHandle, saveRootHandle } from "./core/handle-store.js";
-import { createJourneyCoordinator, CaptureError } from "./core/journey-coordinator.js";
+import { createJourneyCoordinator, CaptureError, toDataUrl } from "./core/journey-coordinator.js";
+import { createExportSettings } from "./core/export-settings.js";
 import { sanitizeCapture } from "./core/capture-image.js";
 import { classifyPage } from "./core/supported-pages.js";
 
@@ -7,6 +8,7 @@ const TOOLBAR_SCRIPT = "content/toolbar.js";
 const TOOLBAR_STYLES = "content/toolbar.css";
 const BINDINGS_KEY = "clicksheet-bindings";
 const BRAND_ICON = "icons/icon-128.png";
+const DOWNLOADS_FOLDER = "Clicksheet";
 
 // Tab ids only mean something for this browser session, so bindings use
 // session storage and disappear when Chrome restarts.
@@ -53,7 +55,69 @@ const browser = {
 // The packaged icon heads every export as part of the brand mark.
 const loadBrandIcon = async () => createImageBitmap(await (await fetch(chrome.runtime.getURL(BRAND_ICON))).blob());
 
-const journeys = createJourneyCoordinator({ loadRootHandle, saveRootHandle, browser, bindings, loadBrandIcon });
+// Saves an image and its context into Downloads/Clicksheet (FR-C3.2). The
+// worker cannot make blob URLs, so the files go to Chrome as data URLs. The
+// context file takes the name Chrome actually gave the image.
+const downloads = {
+  async save({ name, image, context }) {
+    const saved = await download(await toDataUrl(image), `${DOWNLOADS_FOLDER}/${name}.png`);
+    const fileName = leafName(saved.filename);
+    let contextItem;
+    try {
+      contextItem = await download(await toDataUrl(context), `${DOWNLOADS_FOLDER}/${fileName.replace(/\.png$/i, "")}.json`);
+    } catch {
+      throw new Error(`Saved ${fileName} in Downloads/${DOWNLOADS_FOLDER}, but its context file could not be saved. Save again to get both files.`);
+    }
+    return { downloadId: saved.id, fileName, contextFileName: leafName(contextItem.filename) };
+  }
+};
+
+function leafName(path) {
+  return String(path ?? "").split(/[\\/]/).pop();
+}
+
+// Resolves with the finished download item, or rejects if Chrome gives up.
+function download(url, filename) {
+  return new Promise((resolve, reject) => {
+    let id = null;
+    let settled = false;
+    const early = [];
+    const finish = async (state) => {
+      if (settled) return;
+      settled = true;
+      chrome.downloads.onChanged.removeListener(listener);
+      const [item] = await chrome.downloads.search({ id }).catch(() => []);
+      if (state === "complete" && item) resolve(item);
+      else reject(new Error(`Chrome could not save ${leafName(filename)}${item?.error ? ` (${item.error})` : ""}.`));
+    };
+    function listener(delta) {
+      if (id === null) { early.push(delta); return; }
+      if (delta.id === id && delta.state && delta.state.current !== "in_progress") void finish(delta.state.current);
+    }
+    chrome.downloads.onChanged.addListener(listener);
+    chrome.downloads.download({ url, filename, conflictAction: "uniquify", saveAs: false }).then(async (downloadId) => {
+      id = downloadId;
+      for (const delta of early.splice(0)) listener(delta);
+      const [item] = await chrome.downloads.search({ id }).catch(() => []);
+      if (item && item.state !== "in_progress") void finish(item.state);
+    }, (error) => {
+      settled = true;
+      chrome.downloads.onChanged.removeListener(listener);
+      reject(new Error(`Chrome could not save ${leafName(filename)}. ${error?.message ?? ""}`.trim()));
+    });
+  });
+}
+
+const journeys = createJourneyCoordinator({
+  loadRootHandle,
+  saveRootHandle,
+  browser,
+  bindings,
+  loadBrandIcon,
+  downloads,
+  exportSettings: createExportSettings(chrome.storage.local),
+  version: chrome.runtime.getManifest().version
+});
 
 chrome.action.onClicked.addListener(openClicksheet);
 
@@ -110,6 +174,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return;
   }
   const tabId = sender.tab?.id;
+  // The Open / Show bar is an extension page inside the widget, because
+  // chrome.downloads.open needs a click in an extension page. It only ever
+  // learns about the export made in its own tab.
+  if (message?.type === "clicksheet:export-bar" && Number.isInteger(tabId)) {
+    journeys.lastExport(tabId).then(respond, () => respond(null));
+    return true;
+  }
   // Pages may only report their own clicks and changes; tab lifecycle events
   // come from Chrome alone.
   if (message?.type === "clicksheet:page-event" && Number.isInteger(tabId) && ["click", "changed"].includes(message.event?.type)) {

@@ -1,0 +1,8 @@
+/* Sits inside the widget's panel, so it matches the widget's dark theme. */
+html, body { margin: 0; background: #252a35; color: #f5f7fb; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; }
+.bar { display: flex; align-items: center; gap: 8px; margin: 0; padding: 4px 8px; min-height: 36px; box-sizing: border-box; }
+[data-role="file"] { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button { flex: none; background: #252a35; color: #eef3ff; border: 1px solid #4e596b; border-radius: 8px; padding: 5px 10px; font: inherit; cursor: pointer; }
+button:hover { background: #313846; }
+button:focus-visible { outline: 2px solid #66a3ff; outline-offset: 1px; }
+[hidden] { display: none; }

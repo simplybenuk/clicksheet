@@ -29,7 +29,7 @@ export async function applyMasks(blob, masks, {
     context.fillStyle = MASK_COLOR;
     for (const box of boxes) context.fillRect(box.x, box.y, box.width, box.height);
 
-    return { blob: await canvas.convertToBlob({ type: "image/png" }), width, height };
+    return { blob: await canvas.convertToBlob({ type: "image/png" }), width, height, boxes };
   } finally {
     bitmap.close?.();
   }

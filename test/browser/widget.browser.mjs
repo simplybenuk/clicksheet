@@ -124,10 +124,11 @@ export async function run(t) {
 
   // A notice stays visible while collapsed.
   await toolbar.locator('[data-action="export"]').click();
-  await toolbar.locator('[data-action="download-image"]').click();
-  await until(() => toolbar.locator('[data-role="message"]').textContent(), (text) => /Saved .*\.png/.test(text), 15000);
+  await toolbar.locator('[data-action="save-export"]').click();
+  await until(() => toolbar.locator('[data-role="message"]').textContent(), (text) => /Saved \S+ and \S+ in/.test(text), 15000);
   await toolbar.locator('[data-action="expand"]').click();
   check("a notice stays visible while collapsed", !(await inner(".cs-panel"))?.visible && (await inner('[data-role="message"]'))?.visible === true);
+  check("the saved-export bar stays visible while collapsed", (await inner('[data-role="export-bar"]'))?.visible === true);
 
   // The grip moves the widget with the arrow keys.
   // Click the grip with the mouse, as a person would, then use the keys.

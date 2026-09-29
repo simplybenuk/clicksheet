@@ -100,3 +100,7 @@
 #clicksheet-toolbar-root .cs-viewer__stage img:not([src]) { display: none; }
 #clicksheet-toolbar-root [data-role="viewer-status"] { color: #b6c6dd; margin: 20px 0 0; }
 #clicksheet-toolbar-root [data-role="viewer-status"]:empty { display: none; }
+
+/* Saved-export bar: an extension page (Open needs one) plus a close button. */
+#clicksheet-toolbar-root .cs-export-bar { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 0; background: #252a35; border: 1px solid #3a404c; border-radius: 12px; }
+#clicksheet-toolbar-root .cs-export-bar iframe { flex: 1 1 auto; min-width: 0; height: 36px; border: 0; background: #252a35; }

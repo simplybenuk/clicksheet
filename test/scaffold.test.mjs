@@ -13,12 +13,20 @@ test("the extension manifest uses temporary active-tab access", () => {
 
   assert.equal(manifest.manifest_version, 3);
   // `storage` holds per-session tab bindings; it adds no install warning.
-  assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "storage"]);
+  // `downloads` and `downloads.open` save exports to Downloads and open them
+  // (spec journey-context-export FR-C5); nothing else is added.
+  assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "storage", "downloads", "downloads.open"]);
   assert.equal("host_permissions" in manifest, false);
   assert.equal(manifest.background.service_worker, "service-worker.js");
   assert.equal(manifest.background.type, "module");
   assert.equal(manifest.action.default_title, "Open Clicksheet");
   assert.deepEqual(manifest.options_ui, { page: "pages/storage.html", open_in_tab: true });
+  // Only the Open / Show bar is exposed to pages, behind a per-session URL.
+  assert.deepEqual(manifest.web_accessible_resources, [{
+    resources: ["pages/export-bar.html", "pages/export-bar.js", "pages/export-bar.css"],
+    matches: ["http://*/*", "https://*/*"],
+    use_dynamic_url: true
+  }]);
 });
 
 test("every icon the manifest names exists at its declared size", () => {

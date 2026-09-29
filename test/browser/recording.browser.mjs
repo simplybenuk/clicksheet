@@ -3,7 +3,7 @@ import { until } from "./harness.mjs";
 
 export async function run(t) {
   const s = await t.launch({ windowSize: "1280,1600" });
-  const { page, toolbar, frames } = s;
+  const { page, toolbar, frames, worker } = s;
   const { check } = t;
   // Captured data must stay local (FR-001.5): record every request the pages
   // and the extension worker make while recording.
@@ -42,6 +42,11 @@ export async function run(t) {
   check("async page change creates a frame", await s.count(2));
   const firstLabel = await frames.nth(0).textContent();
   check("preceding frame labelled with the target", firstLabel.includes('Click "Load details"'), firstLabel);
+  const clicked = (await until(s.readJourney, (j) => j?.frames[0]?.interaction)).frames[0];
+  check("frames keep the page origin, and clicks keep the target's role and tag",
+    clicked.origin === s.base && clicked.interaction?.role === "button" && clicked.interaction?.tag === "button",
+    `${clicked.origin} ${clicked.interaction?.role} ${clicked.interaction?.tag}`);
+  check("the stored page has no query string", !JSON.stringify(clicked).includes("?"));
   await page.click('[data-action="load-details"]');
   await page.waitForTimeout(150);
   await page.click('[data-action="load-details"]');
@@ -75,6 +80,18 @@ export async function run(t) {
   check("screenshots are stored as PNG files", image.bytes > 1000 && image.dataUrl.startsWith("data:image/png"), `${image.width}x${image.height}`);
   check("the widget is hidden in captured pixels", image.pixels.every((pixel) => pixel !== "27,30,38"), `pixels=${image.pixels.join(" | ")}`);
   check("frame metadata has no query or hash", journey.frames.every((f) => !/[?#]/.test(f.pathname)), journey.frames.map((f) => f.pathname).join(" "));
+  // The context for these real clicks (FR-C2): what an agent would receive.
+  const contextText = await worker.evaluate(async (base) => {
+    const [tab] = await chrome.tabs.query({ url: `${base}/*` });
+    return (await globalThis.__journeys.request(tab.id, { action: "export", destination: "context" })).context;
+  }, s.base);
+  const context = JSON.parse(contextText);
+  const clickedStep = context.steps.find((step) => step.interaction?.name === "Load details");
+  check("the context describes each real click by name, role and tag, with the page's site and path",
+    context.steps.length === journey.frames.length && clickedStep?.interaction.role === "button" && clickedStep.interaction.tag === "button" &&
+    clickedStep.page.origin === s.base && clickedStep.page.pathname.startsWith("/") && context.steps.every((step) => Number.isFinite(step.sinceStartMs)),
+    JSON.stringify(clickedStep));
+  check("the context carries no query string or fragment", !/[?#]/.test(context.steps.map((step) => step.page.pathname).join("")) && !contextText.includes("token="));
   check("no request left the machine while recording", seen > 0 && external.length === 0, `${seen} requests seen; external: ${external.slice(0, 3).join(" ") || "none"}`);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

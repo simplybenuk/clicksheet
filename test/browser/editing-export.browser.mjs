@@ -100,27 +100,83 @@ export async function run(t) {
   await page.waitForTimeout(400);
   await page.waitForFunction(() => !document.querySelector("clicksheet-toolbar")?.shadowRoot
     .querySelector('#clicksheet-toolbar-root [data-action="export"]').disabled, null, { timeout: 5000 }).catch(() => {});
+  // Save image and context: Downloads by default (FR-C3.2), with the bar.
   await action("export").click();
-  await action("download-image").click();
-  await s.messageMatches(/Saved .*\.png/);
-  check("Download image saves into the Journey's exports", /Saved untitled-journey\.png/.test(await s.message()), await s.message());
+  await action("save-export").click();
+  check("Save image and context saves both files to Downloads",
+    await s.messageMatches(/Saved \S+ and \S+ in Downloads\/Clicksheet/), await s.message());
+  const downloaded = await until(s.downloads, (items) => items.filter((item) => item.state === "complete").length >= 2);
+  const image = downloaded.find((item) => item.mime === "image/png");
+  const downloadedContext = JSON.parse(downloaded.find((item) => item.json)?.json ?? "null");
+  journey = await s.readJourney();
+  const expected = layoutContactSheet(journey.frames, { header: headerText(journey) });
+  check("the downloaded context describes the Journey and the sheet",
+    downloadedContext?.format === "clicksheet-context" && downloadedContext.steps.length === journey.frames.length &&
+    downloadedContext.journey.description === DESCRIPTION && downloadedContext.sheet.width === expected.width &&
+    downloadedContext.sheet.height === expected.height && image?.fileSize > 0,
+    JSON.stringify({ sheet: downloadedContext?.sheet, expected: [expected.width, expected.height], steps: downloadedContext?.steps.length }));
+  check("the redacted step is marked as redacted in the context", downloadedContext?.steps[3]?.redacted === true && downloadedContext?.steps[0]?.redacted === false);
+
+  const bar = toolbar.locator('[data-role="export-bar"]');
+  const barFrame = page.frameLocator('#clicksheet-toolbar-root [data-role="export-bar-frame"]');
+  const barText = () => barFrame.locator('[data-role="file"]').textContent();
+  await barFrame.locator('[data-action="show"]').waitFor({ timeout: 5000 }).catch(() => {});
+  const savedName = (await s.message()).match(/^Saved (\S+) and/)?.[1];
+  check("the saved-export bar names the saved image", await bar.isVisible() && savedName && await barText() === savedName, await barText().catch((error) => error.message));
+  await s.screenshot("export-bar.png");
+  await barFrame.locator('[data-action="show"]').click();
+  await page.waitForTimeout(300);
+  check("Show in folder runs from the bar", await barText() === savedName, await barText());
+  await barFrame.locator('[data-action="open"]').click();
+  await page.waitForTimeout(300);
+  check("Open runs from the bar (Chrome needs the click in an extension page)", await barText() === savedName, await barText());
+  await worker.evaluate((id) => chrome.downloads.removeFile(id), image.id);
+  await barFrame.locator('[data-action="show"]').click();
+  check("a moved or deleted file is reported", /moved or deleted/.test(await until(barText, (text) => /moved or deleted/.test(text))), await barText());
+  // Straight after a click in the bar, as a person would: the window regains
+  // focus and refreshes as this click lands, and the click must still count.
+  await action("dismiss-export").click();
+  check("the bar closes", await until(async () => !(await bar.isVisible())), `still visible: ${await s.message()}`);
+
+  // The Clicksheet folder destination (FR-C3.3): pairs in exports/, no bar.
+  await action("settings").click();
+  await toolbar.locator('[data-role="export-destination"]').selectOption("library");
+  await s.screenshot("settings.png");
+  const stored = await until(() => worker.evaluate(async () => (await chrome.storage.local.get("clicksheet-export-settings"))["clicksheet-export-settings"]), (value) => value?.destination === "library");
+  check("the Export to choice is saved", stored?.destination === "library", JSON.stringify(stored));
+  await action("settings").click();
   await action("export").click();
-  await action("download-image").click();
+  await action("save-export").click();
+  await s.messageMatches(/Saved untitled-journey\.png and untitled-journey\.json in .*\/exports\./);
+  check("the Clicksheet folder destination names both files and where they are", /Saved untitled-journey\.png and untitled-journey\.json in .*\/exports\./.test(await s.message()), await s.message());
+  await action("export").click();
+  await action("save-export").click();
   await s.messageMatches(/untitled-journey-2\.png/);
-  journey = await until(s.readJourney, (j) => j.exports.length >= 2);
-  check("a second export does not overwrite the first", journey.exports.sort().join() === "untitled-journey-2.png,untitled-journey.png", journey.exports.join());
-  const sheet = await s.readImage(journey.id, "exports", "untitled-journey.png");
+  const exported = await until(s.listExports, (names) => names.length >= 4);
+  check("a second save does not overwrite the first pair", exported.join() === "untitled-journey-2.json,untitled-journey-2.png,untitled-journey.json,untitled-journey.png", exported.join());
+  check("no Open or Show bar for the Clicksheet folder", !(await bar.isVisible()));
+  const sheet = await s.readExport("untitled-journey.png");
   t.save("sheet.png", sheet.dataUrl.split(",")[1]);
   check("the export is one PNG sized for four cells in one row", sheet.width > 4 * 240, `${sheet.width}x${sheet.height}`);
-  const expected = layoutContactSheet(journey.frames, { header: headerText(journey) });
   check("the export is headed by the Journey title and description",
     journey.description === DESCRIPTION && expected.header.description && sheet.width === expected.width && sheet.height === expected.height,
     `${sheet.width}x${sheet.height}, expected ${expected.width}x${expected.height}`);
+  const savedContext = JSON.parse((await s.readExport("untitled-journey.json")).text);
+  check("the saved context matches the saved image", savedContext.sheet.width === sheet.width && savedContext.sheet.height === sheet.height && savedContext.steps.length === 4);
+
+  // Copy image and Copy context.
   await action("export").click();
   await action("copy-image").click();
   await s.messageMatches(/Copied|could not be copied/);
   const copyMessage = await s.message();
-  check("Copy image reports its result and leaves Download available", /Copied|could not be copied/.test(copyMessage) && !(await action("export").isDisabled()), copyMessage);
+  check("Copy image reports its result and leaves Save available", /Copied|could not be copied/.test(copyMessage) && !(await action("export").isDisabled()), copyMessage);
+  await action("export").click();
+  await action("copy-context").click();
+  await s.messageMatches(/Copied the step context|could not be copied/);
+  const copiedContext = await page.evaluate(() => navigator.clipboard.readText()).then(JSON.parse, () => null);
+  check("Copy context puts the Journey's context JSON on the clipboard",
+    copiedContext?.format === "clicksheet-context" && copiedContext.steps.length === 4 && copiedContext.journey.title === journey.name,
+    `${await s.message()} ${JSON.stringify(copiedContext)?.slice(0, 120)}`);
 
   // Unsupported page: the action explains itself instead of injecting.
   const internal = await context.newPage();

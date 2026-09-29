@@ -11,7 +11,11 @@ import {
   transitionJourney
 } from "./journey.js";
 import { createCaptureScheduler, createRateGate } from "./capture-scheduler.js";
-import { renderContactSheet } from "./export-renderer.js";
+import { headerText, renderContactSheet } from "./export-renderer.js";
+import { layoutContactSheet } from "./export-layout.js";
+import { buildContext } from "./export-context.js";
+import { exportTimestamp, slugifyJourneyName } from "./export-names.js";
+import { createExportSettings, memoryStorageArea } from "./export-settings.js";
 import { fullPageViewport, planFullPage, stitchSegments } from "./full-page.js";
 import { applyMasks } from "./redaction.js";
 
@@ -63,6 +67,11 @@ export function createJourneyCoordinator({
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   schedulerOptions = {},
   loadBrandIcon = null,
+  // Where Save image and context writes (FR-C3), and the Downloads adapter:
+  // save({ name, image, context }) -> { downloadId, fileName, contextFileName }.
+  exportSettings = createExportSettings(memoryStorageArea()),
+  downloads = null,
+  version = "",
   renderSheet = (journey, loadImage, layoutOptions) => renderContactSheet(journey, { loadImage, loadBrandIcon, layoutOptions }),
   decodeImage = (blob) => createImageBitmap(blob),
   stitch = stitchSegments,
@@ -72,6 +81,10 @@ export function createJourneyCoordinator({
   const clicks = new Map();
   const navigating = new Set();
   const notices = new Map();
+  // The layout Copy image last used per Journey, so Copy context describes
+  // the image that was actually copied (a large sheet may use a fallback width).
+  const copyLayouts = new Map();
+  let exportDestination = "downloads";
   // One deleted screenshot can be restored (memory.undo); its file is removed
   // once the Undo window ends so deleted pixels do not linger in the folder.
   // It is persisted because the worker idles out long before users click Undo.
@@ -88,7 +101,7 @@ export function createJourneyCoordinator({
   async function remember() {
     if (!memory) {
       const stored = await bindings.load().catch(() => null);
-      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null, released: stored?.released ?? null, lastCaptured: stored?.lastCaptured ?? null };
+      memory = { selections: { ...(stored?.selections ?? {}) }, recording: stored?.recording ?? null, undo: stored?.undo ?? null, released: stored?.released ?? null, lastCaptured: stored?.lastCaptured ?? null, exports: { ...(stored?.exports ?? {}) } };
     }
     return memory;
   }
@@ -396,6 +409,7 @@ export function createJourneyCoordinator({
 
   async function execute(tabId, command, context) {
     const state = await remember();
+    exportDestination = (await exportSettings.load()).destination;
     let { root, view } = await sync();
     // A binding to a Journey that is not in the connected library (after
     // "Start a new library" or Locate) would block every tab from recording.
@@ -447,12 +461,14 @@ export function createJourneyCoordinator({
         const model = prepareJourney(created);
         session.updateJourney(created.id, { state: model.state, pauseReason: model.pauseReason, recordingSegment: model.recordingSegment });
         state.selections[tabId] = created.id;
+        delete state.exports[tabId];
         await persist();
         break;
       }
       case "open":
         if (current && command.id !== current.id && !controls.openJourney) throw new Error("Stop recording before opening another Journey.");
         if (!find(view, command.id)) throw new Error("Journey not found.");
+        if (command.id !== state.selections[tabId]) delete state.exports[tabId];
         state.selections[tabId] = command.id;
         await persist();
         break;
@@ -562,7 +578,11 @@ export function createJourneyCoordinator({
         const fileName = `${frame.id}-${createId().replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}.png`;
         await storage.writeScreenshot(current.id, fileName, redacted.blob);
         const frames = [...current.frames];
-        frames[index] = { ...frame, screenshotFile: fileName, image: { width: redacted.width, height: redacted.height }, redacted: true };
+        // The boxes are kept so the context file can drop labels they hide. A
+        // frame redacted before boxes were stored stays without them: its
+        // earlier boxes are unknown, so every label on it is treated as hidden.
+        const masks = frame.redacted && !Array.isArray(frame.masks) ? undefined : [...(frame.masks ?? []), ...(redacted.boxes ?? [])];
+        frames[index] = { ...frame, screenshotFile: fileName, image: { width: redacted.width, height: redacted.height }, redacted: true, ...(masks ? { masks } : {}) };
         session.updateJourney(current.id, { frames });
         if (!(await session.flush())) {
           throw new Error("The redaction is held until storage is reconnected. The original screenshot is removed after it saves.");
@@ -579,19 +599,31 @@ export function createJourneyCoordinator({
       case "export": {
         if (!current || !view.available) throw new Error("Reconnect storage before exporting.");
         if (!current.frames.length) throw new Error("Export is unavailable because this Journey has no screenshots.");
-        if (!["copy", "download"].includes(command.destination)) throw new Error("Choose Copy image or Download image.");
+        if (!["copy", "context", "save"].includes(command.destination)) throw new Error("Choose Copy image, Copy context, or Save image and context.");
         const storage = createStorage(root);
-        const load = async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile));
         const journey = prepareJourney(current);
+        const contextFor = (layoutOptions) => JSON.stringify(buildContext(
+          journey,
+          layoutContactSheet(journey.frames, { ...layoutOptions, header: headerText(journey) }),
+          { exportedAt: clock(), version }
+        ), null, 2);
+        const copyKey = JSON.stringify([journey.name, journey.description, journey.frames.map((frame) => frame.screenshotFile)]);
+        if (command.destination === "context") {
+          const copied = copyLayouts.get(current.id);
+          return { ...present(tabId), context: contextFor(copied?.key === copyKey ? copied.layoutOptions : undefined) };
+        }
+        const load = async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile));
         // Full-width screenshots can exceed what Chrome will allocate, or what
         // a runtime message can carry for Copy (64 MiB, plus a third for
         // base64). Retry at smaller widths before giving up; nothing is dropped.
         const limit = command.destination === "copy" ? COPY_LIMIT_BYTES : Infinity;
         let blob = null;
+        let layoutOptions;
         let failure = null;
         for (const imageWidth of [undefined, ...EXPORT_FALLBACK_WIDTHS]) {
           try {
-            blob = await renderSheet(journey, load, imageWidth ? { imageWidth } : undefined);
+            layoutOptions = imageWidth ? { imageWidth } : undefined;
+            blob = await renderSheet(journey, load, layoutOptions);
             failure = null;
             if (blob.size <= limit) break;
           } catch (error) {
@@ -601,13 +633,33 @@ export function createJourneyCoordinator({
         }
         if (failure) throw failure;
         if (command.destination === "copy") {
-          if (blob.size > limit) throw new Error("This contact sheet is too large to copy. Use Download image instead.");
+          if (blob.size > limit) throw new Error("This contact sheet is too large to copy. Use Save image and context instead.");
+          copyLayouts.set(current.id, { key: copyKey, layoutOptions });
           return { ...present(tabId), image: await toDataUrl(blob) };
         }
-        const { fileName } = await storage.writeExport(current.id, current.name, blob);
-        notices.set(tabId, `Saved ${fileName} in ${view.folderName}/journeys/${current.id}/exports.`);
-        return { ...present(tabId), exported: { fileName } };
+        const contextFile = new Blob([contextFor(layoutOptions)], { type: "application/json" });
+        const slug = slugifyJourneyName(current.name);
+        if (exportDestination === "library") {
+          const { fileName, contextFileName } = await storage.writeExportPair(slug, blob, contextFile);
+          delete state.exports[tabId];
+          await persist();
+          notices.set(tabId, `Saved ${fileName} and ${contextFileName} in ${view.folderName}/exports.`);
+          return { ...present(tabId), exported: { destination: "library", fileName, contextFileName } };
+        }
+        if (!downloads) throw new Error("Saving to Downloads is unavailable here. Choose the Clicksheet folder in Settings.");
+        const saved = await downloads.save({ name: `${slug}-${exportTimestamp(new Date(now()))}`, image: blob, context: contextFile });
+        state.exports[tabId] = { downloadId: saved.downloadId, fileName: saved.fileName, contextFileName: saved.contextFileName };
+        await persist();
+        notices.set(tabId, `Saved ${saved.fileName} and ${saved.contextFileName} in Downloads/Clicksheet.`);
+        return { ...present(tabId), exported: { destination: "downloads", ...saved } };
       }
+      case "export-settings":
+        exportDestination = (await exportSettings.save({ destination: command.destination })).destination;
+        break;
+      case "dismiss-export":
+        delete state.exports[tabId];
+        await persist();
+        break;
       case "snapshot":
         break;
       default:
@@ -669,6 +721,8 @@ export function createJourneyCoordinator({
       canExport: Boolean(selected?.frames.length && view.available),
       undo: state.undo && state.undo.journeyId === selected?.id ? { frameId: state.undo.frame.id } : null,
       notice,
+      exportDestination,
+      lastExport: state.exports?.[tabId] ?? null,
       // Only summaries go into the popover; frames belong to the selected strip.
       journeys: view.journeys.map(({ id, name }) => ({ id, name }))
     };
@@ -799,14 +853,20 @@ export function createJourneyCoordinator({
       navigating.delete(tabId);
       return enqueue(async () => {
         await handleEvent(tabId, { type: "removed" });
-        delete (await remember()).selections[tabId];
+        const state = await remember();
+        delete state.selections[tabId];
+        delete state.exports[tabId];
         await persist();
       });
+    },
+    // The latest Downloads export in this tab, for its Open / Show bar.
+    async lastExport(tabId) {
+      return (await remember()).exports[tabId] ?? null;
     }
   };
 }
 
-async function toDataUrl(blob) {
+export async function toDataUrl(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = "";
   for (let start = 0; start < bytes.length; start += 0x8000) {

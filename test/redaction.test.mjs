@@ -47,6 +47,7 @@ test("applyMasks paints opaque masks in image pixels and returns a PNG", async (
   assert.equal(result.blob.type, "image/png");
   assert.equal(result.width, 100);
   assert.equal(result.height, 60);
+  assert.deepEqual(result.boxes, [{ x: 10, y: 5, width: 20, height: 10 }, { x: 90, y: 50, width: 10, height: 10 }]);
   assert.equal(log.closed, 1);
 });
 

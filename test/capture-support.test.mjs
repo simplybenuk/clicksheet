@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sanitizeCapture } from "../extension/core/capture-image.js";
 import { createRateGate } from "../extension/core/capture-scheduler.js";
-import { attachInteraction, buildFrame, sanitizePathname } from "../extension/core/journey.js";
+import { attachInteraction, buildFrame, sanitizeOrigin, sanitizePathname } from "../extension/core/journey.js";
 
 test("password masks are painted opaquely at device-pixel scale before encoding", async () => {
   const fills = [];
@@ -46,6 +46,25 @@ test("frame metadata drops query strings and fragments", () => {
 test("a click is shifted by scroll since the preceding frame and skipped for another page", () => {
   const frame = buildFrame({ id: "frame-1", kind: "initial", page: { pathname: "/a", viewport: { width: 100, height: 50, scrollX: 0, scrollY: 100 } }, image: { width: 100, height: 50 }, capturedAt: "t" });
   const marked = attachInteraction(frame, { rect: { x: 5, y: 10, width: 4, height: 3 }, point: { x: 6, y: 11 }, scrollX: 0, scrollY: 150, label: "  Save  ", pathname: "/a?x" });
-  assert.deepEqual(marked.interaction, { type: "click", label: "Save", rect: { x: 5, y: 60, width: 4, height: 3 }, point: { x: 6, y: 61 } });
+  assert.deepEqual(marked.interaction, { type: "click", label: "Save", role: null, tag: null, rect: { x: 5, y: 60, width: 4, height: 3 }, point: { x: 6, y: 61 } });
   assert.equal(attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, pathname: "/b" }).interaction, null);
+});
+
+test("frames keep the page origin, and clicks keep the target's role and tag", () => {
+  assert.equal(sanitizeOrigin("https://app.example.com"), "https://app.example.com");
+  assert.equal(sanitizeOrigin("https://app.example.com:8443/path?q=1#x"), "https://app.example.com:8443");
+  assert.equal(sanitizeOrigin("null"), null);
+  assert.equal(sanitizeOrigin("not a url"), null);
+  assert.equal(sanitizeOrigin(undefined), null);
+
+  const frame = buildFrame({ id: "frame-1", kind: "initial", page: { origin: "http://127.0.0.1:8080", pathname: "/a", viewport: { width: 100, height: 50 } }, image: { width: 100, height: 50 }, capturedAt: "t" });
+  assert.equal(frame.origin, "http://127.0.0.1:8080");
+  assert.equal(buildFrame({ id: "f", kind: "manual", page: { pathname: "/" }, image: { width: 1, height: 1 }, capturedAt: "t" }).origin, null);
+
+  const marked = attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, label: "Add user", role: "button", tag: "button", pathname: "/a" });
+  assert.equal(marked.interaction.role, "button");
+  assert.equal(marked.interaction.tag, "button");
+  const odd = attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, role: "", tag: "<script>", pathname: "/a" });
+  assert.equal(odd.interaction.role, null);
+  assert.equal(odd.interaction.tag, null);
 });

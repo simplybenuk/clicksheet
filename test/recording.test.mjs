@@ -37,7 +37,7 @@ test("a page-changing click captures once after the delay and marks the precedin
   view = await coordinator.request(1, { action: "snapshot", journeyId: id });
   const [before, after] = view.currentJourney.frames;
   assert.equal(view.currentJourney.frames.length, 2);
-  assert.deepEqual(before.interaction, { type: "click", label: "Settings", rect: { x: 10, y: 5, width: 20, height: 10 }, point: { x: 15, y: 10 } });
+  assert.deepEqual(before.interaction, { type: "click", label: "Settings", role: null, tag: null, rect: { x: 10, y: 5, width: 20, height: 10 }, point: { x: 15, y: 10 } });
   assert.equal(after.kind, "click");
   assert.equal(after.pathname, "/settings");
   assert.equal(after.interaction, null);

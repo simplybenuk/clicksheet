@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { nextExportName, slugifyJourneyName } from "../extension/core/export-names.js";
+import { exportTimestamp, nextExportBase, nextExportName, slugifyJourneyName } from "../extension/core/export-names.js";
 
 test("slugs are lowercase ASCII with single hyphens", () => {
   assert.equal(slugifyJourneyName("Create a new user"), "create-a-new-user");
@@ -29,4 +29,14 @@ test("export names get numeric suffixes on collision, case-insensitively", () =>
   assert.equal(nextExportName("flow", ["flow.png"]), "flow-2.png");
   assert.equal(nextExportName("flow", ["FLOW.PNG", "flow-2.png"]), "flow-3.png");
   assert.equal(nextExportName("flow", ["flow.png", "flow-3.png"]), "flow-2.png");
+});
+
+test("pair bases are free for both files", () => {
+  assert.equal(nextExportBase("flow", []), "flow");
+  assert.equal(nextExportBase("flow", ["flow.png"]), "flow-2");
+  assert.equal(nextExportBase("flow", ["FLOW.json", "flow-2.PNG"]), "flow-3");
+});
+
+test("Downloads timestamps use the local date and time", () => {
+  assert.equal(exportTimestamp(new Date(2026, 8, 9, 7, 5)), "2026-09-09-0705");
 });
