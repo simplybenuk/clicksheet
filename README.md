@@ -146,7 +146,9 @@ Let's find out.
 
 🚧 **Early experiment.** The MVP flow works end to end in Chrome but has not been through human testing yet.
 
-To try it:
+## Install
+
+Clicksheet is not yet on the Chrome Web Store. Until it is, load it from source:
 
 1. Run `npm run build`.
 2. Open `chrome://extensions`, turn on Developer mode, and load the `dist/` folder as an unpacked extension.
@@ -157,7 +159,17 @@ To try it:
 
 If a keyboard shortcut does not work, open **Settings** in the widget: it shows which shortcuts Chrome has assigned and links to the page where you can set them.
 
+## Privacy
+
+Clicksheet runs entirely on your computer. It has no servers, analytics, or tracking, and screenshots are saved only to a local folder you choose. See [PRIVACY.md](PRIVACY.md) for details.
+
+## Development
+
 Run `npm test` for the syntax check, build, and unit tests.
+
+Run `npm run package` to build the extension and zip it into `build/clicksheet-<version>.zip` for upload to the Chrome Web Store. The zip is reproducible: the same source always produces the same file. Bump `version` in `extension/manifest.json` before each store upload, because the store rejects a version it has already seen.
+
+The icons in `extension/icons/` are rendered from `assets/icon.svg`; the command to regenerate them is in that file.
 
 The optional browser suite, `npm run test:browser`, needs playwright-core and a Chromium build (set `CLICKSHEET_PLAYWRIGHT` and `CLICKSHEET_CHROMIUM` if Node cannot find them). It loads a test-only copy of the extension with broad host access, because automation cannot click the toolbar icon.
 

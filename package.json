@@ -6,6 +6,7 @@
   "description": "A Chrome extension that turns browser journeys into visual context.",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "package": "node scripts/build.mjs && node scripts/package.mjs",
     "check": "node scripts/check.mjs",
     "fixture": "node scripts/serve-fixture.mjs",
     "test:unit": "node --test \"test/**/*.test.mjs\"",
