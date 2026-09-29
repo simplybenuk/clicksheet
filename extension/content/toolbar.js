@@ -139,6 +139,7 @@
   let saveFailed = false;
   let notice = "";
   let requestTail = Promise.resolve();
+  let flushTail = Promise.resolve();
   let stopWatching = null;
   let hiddenForCapture = null;
   // Elements whose inline style Clicksheet changes during a capture (covered
@@ -455,15 +456,22 @@
     requestTail = pending.catch(() => {});
     return pending;
   }
-  async function flushEdits() {
+  // One flush at a time: a call made while another is in flight waits for it
+  // and then runs its own pass, so fields, revision and status are only ever
+  // judged in order. Errors still reach each caller.
+  function flushEdits() {
     if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
+    const pending = flushTail.then(flushOnce);
+    flushTail = pending.catch(() => {});
+    return pending;
+  }
+  async function flushOnce() {
     if (savedRevision === editRevision) return;
     const revision = editRevision;
     const fields = [...editedFields];
     editedFields.clear();
     try {
-      // With nothing left to send (another flush took the fields), refresh
-      // the view so a stale status is not judged.
+      // With no fields to send, refresh the view so a stale status is not judged.
       if (!fields.length) await request({ action: "snapshot" });
       if (fields.includes("name")) await request({ action: "rename", name: role("name").value });
       if (fields.includes("description")) await request({ action: "describe", description: role("description").value });
@@ -475,11 +483,8 @@
       saveFailed = true;
       throw error;
     }
-    // Fields put back by an overlapping flush that failed (or typed since)
-    // are still unsaved, so this revision is not saved either.
-    if (editedFields.size) return;
     saveFailed = false;
-    savedRevision = revision;
+    savedRevision = Math.max(savedRevision, revision);
   }
   async function run(command) {
     if (busy) return;

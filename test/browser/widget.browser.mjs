@@ -189,25 +189,31 @@ export async function run(t) {
   check("commands work again after reconnecting", afterHeld === first && !/held here/.test(await s.message()), await s.message());
 
   // Overlapping saves: a refresh that starts while a rename is in flight
-  // must not mark the edit saved when that rename then fails.
+  // must not mark the edit saved when that rename then fails. The stub holds
+  // the rename until the test releases it, so no step depends on timing.
   await worker.evaluate(() => {
     const journeys = globalThis.__journeys;
     const original = journeys.request;
+    globalThis.__renameHeld = false;
     journeys.request = async (...args) => {
       if (args[1]?.action !== "rename") return original(...args);
       journeys.request = original;
-      await new Promise((done) => setTimeout(done, 1500));
+      globalThis.__renameHeld = true;
+      await new Promise((done) => { globalThis.__releaseRename = done; });
       throw new Error("Simulated failed rename.");
     };
   });
   await toolbar.locator('[data-role="name"]').fill("Raced name");
   await toolbar.locator('[data-role="name"]').blur();
-  await page.waitForTimeout(700);
+  const heldRename = await until(() => worker.evaluate(() => globalThis.__renameHeld), Boolean, 5000);
+  check("the debounced rename reaches the worker and is held", heldRename);
+  // The focus listener starts its flush synchronously, so it overlaps the held rename.
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await page.waitForTimeout(2000);
-  check("a rename that fails during another save keeps the edit", await toolbar.locator('[data-role="name"]').inputValue() === "Raced name" && await saveStatus() !== "Saved locally", await saveStatus());
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  check("an overlapping refresh does not report the held rename as saved", await saveStatus() !== "Saved locally", await saveStatus());
+  await worker.evaluate(() => globalThis.__releaseRename());
   const raced = await until(s.readJourney, (j) => j?.name === "Raced name", 5000);
-  check("the kept rename is sent on the next save", raced?.name === "Raced name", raced?.name);
+  check("a rename that fails during another save is kept and sent again", raced?.name === "Raced name" && await toolbar.locator('[data-role="name"]').inputValue() === "Raced name", raced?.name);
+  const racedStatus = await until(saveStatus, (text) => text === "Saved locally", 5000);
+  check("the status returns to Saved locally once the rename is written", racedStatus === "Saved locally", racedStatus);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }
