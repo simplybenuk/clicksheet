@@ -475,6 +475,9 @@
       saveFailed = true;
       throw error;
     }
+    // Fields put back by an overlapping flush that failed (or typed since)
+    // are still unsaved, so this revision is not saved either.
+    if (editedFields.size) return;
     saveFailed = false;
     savedRevision = revision;
   }

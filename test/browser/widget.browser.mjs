@@ -187,5 +187,27 @@ export async function run(t) {
   await toolbar.locator('[data-action="move-right"]').click();
   const afterHeld = await until(async () => (await s.readJourney()).frames[1]?.id, (id) => id === first, 4000);
   check("commands work again after reconnecting", afterHeld === first && !/held here/.test(await s.message()), await s.message());
+
+  // Overlapping saves: a refresh that starts while a rename is in flight
+  // must not mark the edit saved when that rename then fails.
+  await worker.evaluate(() => {
+    const journeys = globalThis.__journeys;
+    const original = journeys.request;
+    journeys.request = async (...args) => {
+      if (args[1]?.action !== "rename") return original(...args);
+      journeys.request = original;
+      await new Promise((done) => setTimeout(done, 1500));
+      throw new Error("Simulated failed rename.");
+    };
+  });
+  await toolbar.locator('[data-role="name"]').fill("Raced name");
+  await toolbar.locator('[data-role="name"]').blur();
+  await page.waitForTimeout(700);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(2000);
+  check("a rename that fails during another save keeps the edit", await toolbar.locator('[data-role="name"]').inputValue() === "Raced name" && await saveStatus() !== "Saved locally", await saveStatus());
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const raced = await until(s.readJourney, (j) => j?.name === "Raced name", 5000);
+  check("the kept rename is sent on the next save", raced?.name === "Raced name", raced?.name);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

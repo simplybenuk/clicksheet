@@ -144,8 +144,8 @@ function layoutAt(frames, imageWidth, headerText) {
 }
 
 // Title (bold, at most two lines) and brand mark side by side, then the full
-// description across the whole width. When the title column would be less
-// than half the grid, the mark takes its own row above the title instead.
+// description across the whole width. When the title does not fit beside the
+// mark, the mark takes its own row above the title instead (FR-H3.4).
 function layoutHeader({ title = "", description = "" }, metrics, width) {
   const { margin, fontSize, lineHeight } = metrics;
   const titleSize = Math.round(fontSize * 1.4);
@@ -164,7 +164,11 @@ function layoutHeader({ title = "", description = "" }, metrics, width) {
   const textWidth = Math.ceil(Math.max(textWidthEstimate(BRAND_NAME, fontSize), ...lines.map((text) => textWidthEstimate(text, lineSize))));
   const brandWidth = Math.min(width, iconSize + iconGap + textWidth);
   const sideWidth = width - brandWidth - fontSize * 2;
-  const inline = sideWidth >= width / 2;
+  // Inline only when the whole title fits beside the mark, at the bold
+  // estimate, and the column is at least a short word wide.
+  const sideLines = wrapText(title, maxCharsFor(sideWidth, titleSize));
+  const inline = sideWidth >= titleSize * 3 && sideLines.length <= TITLE_MAX_LINES &&
+    sideLines.every((line) => textWidthEstimate(line, titleSize) <= sideWidth);
 
   const brand = {
     x: margin + width - brandWidth,

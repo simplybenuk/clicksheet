@@ -239,11 +239,21 @@ test("long titles wrap to two lines and end with an ellipsis", () => {
   assert.ok(title.startsWith(lines[0]));
 });
 
-test("the brand mark shares the title row on wide sheets and takes its own row on narrow ones", () => {
-  const wide = layoutContactSheet(frames(6), header()).header;
-  assert.equal(wide.title.y, wide.brand.y);
-  assert.ok(wide.title.x + wide.title.width < wide.brand.x);
-  assert.equal(wide.brand.x + wide.brand.width, wide.x + wide.width);
+test("the brand mark shares the title row when the title fits beside it and takes its own row when not", () => {
+  const inlineFits = (header) => {
+    assert.equal(header.title.y, header.brand.y);
+    assert.ok(header.title.x + header.title.width < header.brand.x);
+    assert.equal(header.brand.x + header.brand.width, header.x + header.width);
+    assert.ok(header.title.lines.every((line) => !line.endsWith("…") && line.length * header.title.fontSize * 0.6 <= header.title.width));
+  };
+  inlineFits(layoutContactSheet(frames(6), header()).header);
+  // A short title stays beside the mark even on a 1-screenshot sheet.
+  for (const size of [undefined, { width: 640, height: 400 }]) {
+    const short = layoutContactSheet(frames(1, size), header("Login")).header;
+    inlineFits(short);
+    assert.deepEqual(short.title.lines, ["Login"]);
+    assert.equal(short.height, Math.max(short.brand.height, short.title.lineHeight));
+  }
 
   const narrow = layoutContactSheet(frames(1), header()).header;
   assert.ok(narrow.title.y >= narrow.brand.y + narrow.brand.height);
