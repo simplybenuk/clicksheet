@@ -6,6 +6,7 @@ import { classifyPage } from "./core/supported-pages.js";
 const TOOLBAR_SCRIPT = "content/toolbar.js";
 const TOOLBAR_STYLES = "content/toolbar.css";
 const BINDINGS_KEY = "clicksheet-bindings";
+const BRAND_ICON = "icons/icon-128.png";
 
 // Tab ids only mean something for this browser session, so bindings use
 // session storage and disappear when Chrome restarts.
@@ -49,7 +50,10 @@ const browser = {
   }
 };
 
-const journeys = createJourneyCoordinator({ loadRootHandle, saveRootHandle, browser, bindings });
+// The packaged icon heads every export as part of the brand mark.
+const loadBrandIcon = async () => createImageBitmap(await (await fetch(chrome.runtime.getURL(BRAND_ICON))).blob());
+
+const journeys = createJourneyCoordinator({ loadRootHandle, saveRootHandle, browser, bindings, loadBrandIcon });
 
 chrome.action.onClicked.addListener(openClicksheet);
 

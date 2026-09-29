@@ -14,7 +14,7 @@ When you use Clicksheet on a page, it handles:
 
 - **Screenshots** of the visible page, captured only when you are recording a Journey or press **Capture**.
 - **Page details** for each screenshot: the page title and address, and the position of the element you clicked, so steps can be labelled and highlighted.
-- **Journey details** you enter, such as Journey names and redaction boxes.
+- **Journey details** you enter, such as Journey names, descriptions, and redaction boxes. The name and description are printed at the top of every contact sheet you export.
 - **Widget preferences**, such as where you placed the floating widget and whether it is expanded.
 
 Password fields are masked before a screenshot is saved. You can also draw redaction boxes over anything else before exporting.

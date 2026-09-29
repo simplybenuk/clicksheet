@@ -62,7 +62,8 @@ export function createJourneyCoordinator({
   gate = createRateGate({ minIntervalMs: 600 }),
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   schedulerOptions = {},
-  renderSheet = (journey, loadImage, layoutOptions) => renderContactSheet(journey, { loadImage, layoutOptions }),
+  loadBrandIcon = null,
+  renderSheet = (journey, loadImage, layoutOptions) => renderContactSheet(journey, { loadImage, loadBrandIcon, layoutOptions }),
   decodeImage = (blob) => createImageBitmap(blob),
   stitch = stitchSegments,
   redactImage = applyMasks
@@ -416,6 +417,7 @@ export function createJourneyCoordinator({
       await persist();
     }
     if (command.action === "rename" && command.journeyId !== id) throw new Error("Journey not found. Reopen it before renaming.");
+    if (command.action === "describe" && command.journeyId !== id) throw new Error("Journey not found. Reopen it before changing its description.");
     let current = find(view, id);
     if (current && ["snapshot", "open", "new"].includes(command.action)) {
       await reconcile(view, current);
@@ -457,6 +459,11 @@ export function createJourneyCoordinator({
       case "rename":
         if (!current || !view.renamable || typeof command.name !== "string") throw new Error("This Journey cannot be renamed now.");
         session.rename(current.id, command.name);
+        break;
+      // Held like a rename while the folder is unavailable.
+      case "describe":
+        if (!current || !view.renamable || typeof command.description !== "string") throw new Error("This Journey's description cannot be changed now.");
+        session.describe(current.id, command.description);
         break;
       case "record": {
         requireJourney(current, controls.record, state, tabId);

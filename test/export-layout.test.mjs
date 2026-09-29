@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BRAND_LINE,
   containBox,
   ExportTooLargeError,
   layoutContactSheet,
   MAX_CANVAS_SIDE,
-  sanitizePathname
+  sanitizePathname,
+  wrapText
 } from "../extension/core/export-layout.js";
 
 function frame(index, { width = 1280, height = 720, ...rest } = {}) {
@@ -178,4 +180,88 @@ test("screenshots keep their captured width so zooming shows full detail", () =>
   assert.equal(layoutContactSheet(frames(6, { width: 2560, height: 1440 })).imageWidth, 1920, "high-density captures are capped");
   assert.equal(layoutContactSheet(frames(2, { width: 300, height: 200 })).imageWidth, 300);
   assert.equal(layoutContactSheet([{ id: "old", screenshotFile: "old.png" }]).imageWidth, 640, "frames without size fall back to the default");
+});
+
+const header = (title = "Create a new user", description = "") => ({ header: { title, description } });
+const DESCRIPTION = "Start on the dashboard, open Settings, then Users, and add a teammate with the Editor role. " +
+  "We want to remove the Users step so that Add user is reachable straight from Settings, without losing the list view. " +
+  "Check the empty state and the error when the email is already taken.";
+
+test("without a header the grid starts at the margin", () => {
+  const layout = layoutContactSheet(frames(3));
+  assert.equal(layout.header, null);
+  assert.equal(layout.cells[0].y, layout.metrics.margin);
+});
+
+test("the header sits above an otherwise unchanged grid", () => {
+  const plain = layoutContactSheet(frames(8));
+  const layout = layoutContactSheet(frames(8), header("Create a new user", "Add a teammate."));
+  const offset = layout.header.height + layout.metrics.lineHeight;
+
+  assert.equal(layout.width, plain.width);
+  assert.equal(layout.height, plain.height + offset);
+  layout.cells.forEach((cell, index) => {
+    const before = plain.cells[index];
+    assert.equal(cell.x, before.x);
+    assert.equal(cell.y, before.y + offset);
+    assert.deepEqual(cell.lines, before.lines);
+    assert.equal(cell.number, before.number);
+  });
+  assert.ok(layout.header.title.fontSize > layout.metrics.fontSize);
+  assert.ok(layout.header.brand.name.fontSize < layout.header.title.fontSize);
+  assert.ok(layout.header.y + layout.header.height < layout.cells[0].y);
+});
+
+test("an empty description reserves no space", () => {
+  const layout = layoutContactSheet(frames(8), header("Create a new user", "  \n "));
+  const { title, brand, description } = layout.header;
+  assert.equal(description, null);
+  assert.equal(layout.header.height, Math.max(brand.height, title.lines.length * title.lineHeight));
+});
+
+test("the whole description is drawn, wrapped to the grid width", () => {
+  for (const count of [1, 40]) {
+    const layout = layoutContactSheet(frames(count), header("Flow", `${DESCRIPTION}\nSecond   line.`));
+    const { description } = layout.header;
+    assert.equal(description.lines.join(" "), `${DESCRIPTION} Second line.`);
+    if (count === 1) assert.ok(description.lines.length > 1);
+    assert.ok(description.lines.every((line) => line.length <= Math.floor(description.width / (description.fontSize * 0.55))));
+    assert.equal(description.width, layout.width - 2 * layout.metrics.margin);
+  }
+});
+
+test("long titles wrap to two lines and end with an ellipsis", () => {
+  const title = "Create a new user from the settings page and then invite them ".repeat(4).trim();
+  const { lines } = layoutContactSheet(frames(1), header(title)).header.title;
+  assert.equal(lines.length, 2);
+  assert.ok(lines[1].endsWith("…"));
+  assert.ok(title.startsWith(lines[0]));
+});
+
+test("the brand mark shares the title row on wide sheets and takes its own row on narrow ones", () => {
+  const wide = layoutContactSheet(frames(6), header()).header;
+  assert.equal(wide.title.y, wide.brand.y);
+  assert.ok(wide.title.x + wide.title.width < wide.brand.x);
+  assert.equal(wide.brand.x + wide.brand.width, wide.x + wide.width);
+
+  const narrow = layoutContactSheet(frames(1), header()).header;
+  assert.ok(narrow.title.y >= narrow.brand.y + narrow.brand.height);
+  assert.equal(narrow.title.width, narrow.width);
+  assert.equal(narrow.brand.x + narrow.brand.width, narrow.x + narrow.width);
+  assert.equal(narrow.brand.line.text, BRAND_LINE);
+});
+
+test("the header counts toward the canvas limits", () => {
+  const plain = layoutContactSheet(frames(12));
+  const maxArea = plain.width * plain.height;
+  const layout = layoutContactSheet(frames(12), { ...header("Flow", DESCRIPTION), maxArea });
+  assert.ok(layout.width * layout.height <= maxArea);
+  assert.ok(layout.imageWidth < plain.imageWidth);
+  assert.throws(() => layoutContactSheet(frames(12), { ...header("Flow", DESCRIPTION), maxSide: 400 }), ExportTooLargeError);
+});
+
+test("wrapText splits words longer than a line", () => {
+  assert.deepEqual(wrapText("ab abcdefgh c", 4), ["ab", "abcd", "efgh", "c"]);
+  assert.deepEqual(wrapText("", 4), []);
+  assert.deepEqual(wrapText("one two three four", 7, 2), ["one two", "three…"]);
 });

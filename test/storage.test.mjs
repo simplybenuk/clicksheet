@@ -7,6 +7,7 @@ import {
   createStorage,
   DEFAULT_JOURNEY_NAME,
   DEFAULT_SETTINGS,
+  DESCRIPTION_MAX_LENGTH,
   JourneyConflictError,
   migrateRoot,
   MigrationError
@@ -307,4 +308,41 @@ test("constant-clock saves still detect stale copies of a Journey", async () => 
   assert.notEqual(next.updatedAt, initial.updatedAt);
   await assert.rejects(storage.saveJourney({ ...initial, name: "Stale rename" }), /changed on disk/);
   assert.equal((await storage.loadJourney(initial.id)).frames.length, 1);
+});
+
+async function overwriteJourneyFile(volume, id, value) {
+  const file = await (await (await volume.root.getDirectoryHandle("journeys"))
+    .getDirectoryHandle(id)).getFileHandle("journey.json");
+  const writable = await file.createWritable();
+  await writable.write(JSON.stringify(value));
+  await writable.close();
+}
+
+test("descriptions are saved trimmed, and Journeys without one read as empty", async () => {
+  const { volume, storage } = setup();
+  await storage.initialize();
+  const journey = await storage.createJourney();
+  assert.equal(journey.description, "");
+
+  const saved = await storage.saveJourney({ ...journey, description: "  Add a user from Settings.  " });
+  assert.equal(saved.description, "Add a user from Settings.");
+  assert.equal((await readJson(volume.root, `journeys/${journey.id}/journey.json`)).description, "Add a user from Settings.");
+
+  // A Journey saved before descriptions existed.
+  const { description, ...older } = saved;
+  await overwriteJourneyFile(volume, journey.id, older);
+  assert.equal((await storage.loadJourney(journey.id)).description, "");
+});
+
+test("descriptions longer than the limit are cut to 280 characters", async () => {
+  const { volume, storage } = setup();
+  await storage.initialize();
+  const journey = await storage.createJourney();
+  await overwriteJourneyFile(volume, journey.id, { ...journey, description: "é".repeat(300) });
+
+  const loaded = await storage.loadJourney(journey.id);
+  assert.equal(Array.from(loaded.description).length, DESCRIPTION_MAX_LENGTH);
+  const saved = await storage.saveJourney({ ...loaded, description: "x".repeat(300) });
+  assert.equal(saved.description.length, DESCRIPTION_MAX_LENGTH);
+  assert.equal((await storage.loadJourney(journey.id)).description.length, DESCRIPTION_MAX_LENGTH);
 });

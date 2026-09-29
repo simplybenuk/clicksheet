@@ -592,3 +592,25 @@ test("starting a new library after the folder is gone drops held edits for missi
   assert.equal(view.hasUnsavedChanges, false);
   assert.deepEqual(Object.keys(snapshot(fresh.root)).filter((path) => path.startsWith("journeys/") && path.endsWith(".json")), []);
 });
+
+test("a description is autosaved, and held and saved on Reconnect like a rename", async () => {
+  const volume = createVolume();
+  const { session } = setup();
+  await session.chooseRoot(volume.root);
+  const journey = session.createJourney();
+  session.describe(journey.id, "Check the new-user flow.");
+  await session.flush();
+  const description = async () => JSON.parse(await readText(volume.root, `journeys/${journey.id}/journey.json`)).description;
+  assert.equal(await description(), "Check the new-user flow.");
+
+  volume.removed = true;
+  await session.refreshAccess();
+  session.describe(journey.id, "Held description");
+  await session.flush();
+  assert.equal(session.snapshot().hasUnsavedChanges, true);
+
+  volume.removed = false;
+  assert.equal(await session.reconnect(), true);
+  assert.equal(await description(), "Held description");
+  assert.equal(session.snapshot().hasUnsavedChanges, false);
+});
