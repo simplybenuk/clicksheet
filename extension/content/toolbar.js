@@ -58,7 +58,8 @@
           <span data-role="save-status" aria-live="polite"></span>
         </div>
         <div class="cs-description">
-          <textarea data-role="description" rows="2" maxlength="280" aria-label="Description (optional)" placeholder="Description (optional): what is this journey for?"></textarea>
+          <label for="cs-description">Description (optional)</label>
+          <textarea id="cs-description" data-role="description" rows="2" maxlength="280" placeholder="What is this journey for?"></textarea>
           <span data-role="description-count" aria-live="polite"></span>
         </div>
         <div data-role="library" class="clicksheet-toolbar__library" hidden>
@@ -461,14 +462,19 @@
     const fields = [...editedFields];
     editedFields.clear();
     try {
+      // With nothing left to send (another flush took the fields), refresh
+      // the view so a stale status is not judged.
+      if (!fields.length) await request({ action: "snapshot" });
       if (fields.includes("name")) await request({ action: "rename", name: role("name").value });
       if (fields.includes("description")) await request({ action: "describe", description: role("description").value });
+      // Held fields are kept and sent again on the next flush, which also
+      // brings a fresh view once storage is reconnected.
+      if (view.status !== "Saved locally" || view.hasUnsavedChanges) throw new Error("The change is held here. Reconnect the folder on the Storage page, then return to save it.");
     } catch (error) {
       for (const field of fields) editedFields.add(field);
       saveFailed = true;
       throw error;
     }
-    if (view.status !== "Saved locally" || view.hasUnsavedChanges) { saveFailed = true; throw new Error("The change is held here. Reconnect the folder on the Storage page, then return to save it."); }
     saveFailed = false;
     savedRevision = revision;
   }

@@ -227,6 +227,46 @@ test("a failed icon load still exports, with the text brand mark", async () => {
   assert.equal(canvases[0].ctx.ops.filter((entry) => entry.op === "drawImage").length, 1);
 });
 
+test("an icon that cannot be drawn still exports, with the text brand mark", async () => {
+  const journey = { name: "Flow", frames: [frame(1)] };
+  const { canvases, createCanvas } = fakeCanvas();
+  const icon = { width: 128, height: 128, closed: false, close() { this.closed = true; } };
+  const warnings = [];
+  const warn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const blob = await renderContactSheet(journey, {
+      loadImage: bitmapLoader().loadImage,
+      loadBrandIcon: async () => icon,
+      createCanvas: (width, height) => {
+        const canvas = createCanvas(width, height);
+        const draw = canvas.ctx.drawImage;
+        canvas.ctx.drawImage = (image, ...args) => { if (image === icon) throw new TypeError("not drawable"); return draw(image, ...args); };
+        return canvas;
+      }
+    });
+    assert.equal(blob.type, "image/png");
+    const { ctx } = canvases[0];
+    const text = ctx.ops.filter((entry) => entry.op === "fillText").map((entry) => entry.args[0]);
+    assert.ok(text.includes(BRAND_NAME) && text.includes(BRAND_LINE));
+    assert.ok(ctx.ops.some((entry) => entry.op === "drawImage" && entry.args[0].id === "frame-1"));
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(icon.closed, true);
+  assert.equal(warnings.length, 1);
+});
+
+test("on the narrowest sheets the brand line is drawn on two lines", async () => {
+  const journey = { name: "Flow", frames: [frame(1, { image: { width: 240, height: 200 } })] };
+  const { canvases, createCanvas } = fakeCanvas();
+  await renderContactSheet(journey, { loadImage: bitmapLoader().loadImage, createCanvas });
+  const lines = canvases[0].ctx.ops.filter((entry) => entry.op === "fillText" && BRAND_LINE.includes(entry.args[0]) && entry.args[0] !== "");
+  assert.deepEqual(lines.map((entry) => entry.args[0]), ["Chrome extension", "github.com/simplybenuk/clicksheet"]);
+  assert.equal(lines[0].args[1], lines[1].args[1]);
+  assert.ok(lines[1].args[2] > lines[0].args[2]);
+});
+
 test("empty Journeys are rejected before any image is loaded", async () => {
   const images = bitmapLoader();
   await assert.rejects(

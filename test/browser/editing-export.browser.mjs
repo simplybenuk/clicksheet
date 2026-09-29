@@ -20,6 +20,9 @@ export async function run(t) {
   // Description: autosaves, and counts down near the 280-character limit.
   const description = toolbar.locator('[data-role="description"]');
   const count = toolbar.locator('[data-role="description-count"]');
+  const label = toolbar.locator('label[for="cs-description"]');
+  check("the description has a visible label and the spec's placeholder",
+    await label.isVisible() && await label.textContent() === "Description (optional)" && await description.getAttribute("placeholder") === "What is this journey for?");
   await description.fill("a".repeat(250));
   check("the remaining count shows near the limit", await count.textContent() === "30 left", await count.textContent());
   await description.fill(DESCRIPTION);

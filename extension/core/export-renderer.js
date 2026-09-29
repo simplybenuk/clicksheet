@@ -111,7 +111,7 @@ async function drawBrand(ctx, brand, loadBrandIcon) {
   ctx.font = `700 ${name.fontSize}px ${FONT_FAMILY}`;
   const nameWidth = measure(ctx, name.text);
   ctx.font = `400 ${line.fontSize}px ${FONT_FAMILY}`;
-  const lineWidth = measure(ctx, line.text);
+  const lineWidth = Math.max(...line.lines.map((text) => measure(ctx, text)));
   const textWidth = Math.min(Math.max(nameWidth, lineWidth), brand.width - iconSize - iconGap);
   const textX = right - textWidth;
 
@@ -120,7 +120,9 @@ async function drawBrand(ctx, brand, loadBrandIcon) {
   ctx.fillText(name.text, textX, baselineIn(brand.y, name.lineHeight), textWidth);
   ctx.fillStyle = COLORS.muted;
   ctx.font = `400 ${line.fontSize}px ${FONT_FAMILY}`;
-  ctx.fillText(line.text, textX, baselineIn(brand.y + name.lineHeight, line.lineHeight), textWidth);
+  line.lines.forEach((text, row) => {
+    ctx.fillText(text, textX, baselineIn(brand.y + name.lineHeight + row * line.lineHeight, line.lineHeight), textWidth);
+  });
 
   let icon = null;
   try {
@@ -129,8 +131,11 @@ async function drawBrand(ctx, brand, loadBrandIcon) {
     console.warn("Clicksheet exported without its icon because the icon could not be loaded.", error?.message);
   }
   if (!icon) return;
+  // An icon that loads but cannot be drawn is treated like a failed load.
   try {
     ctx.drawImage(icon, textX - iconGap - iconSize, brand.y, iconSize, iconSize);
+  } catch (error) {
+    console.warn("Clicksheet exported without its icon because the icon could not be drawn.", error?.message);
   } finally {
     icon.close?.();
   }

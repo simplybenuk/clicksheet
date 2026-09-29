@@ -155,9 +155,13 @@ function layoutHeader({ title = "", description = "" }, metrics, width) {
   const lineSize = Math.max(11, Math.round(fontSize * 0.8));
   const nameLineHeight = Math.round(fontSize * 1.3);
   const smallLineHeight = Math.round(lineSize * 1.3);
-  const iconSize = nameLineHeight + smallLineHeight;
   const iconGap = Math.round(fontSize * 0.5);
-  const textWidth = Math.ceil(Math.max(textWidthEstimate(BRAND_NAME, fontSize), textWidthEstimate(BRAND_LINE, lineSize)));
+  // A line too long for the grid (narrow sheets) splits at " · " rather than
+  // being condensed; the icon grows with the text block.
+  const oneLineSize = nameLineHeight + smallLineHeight;
+  const lines = textWidthEstimate(BRAND_LINE, lineSize) <= width - oneLineSize - iconGap ? [BRAND_LINE] : BRAND_LINE.split(" · ");
+  const iconSize = nameLineHeight + lines.length * smallLineHeight;
+  const textWidth = Math.ceil(Math.max(textWidthEstimate(BRAND_NAME, fontSize), ...lines.map((text) => textWidthEstimate(text, lineSize))));
   const brandWidth = Math.min(width, iconSize + iconGap + textWidth);
   const sideWidth = width - brandWidth - fontSize * 2;
   const inline = sideWidth >= width / 2;
@@ -170,7 +174,7 @@ function layoutHeader({ title = "", description = "" }, metrics, width) {
     iconSize,
     iconGap,
     name: { text: BRAND_NAME, fontSize, lineHeight: nameLineHeight },
-    line: { text: BRAND_LINE, fontSize: lineSize, lineHeight: smallLineHeight }
+    line: { lines, fontSize: lineSize, lineHeight: smallLineHeight }
   };
 
   const titleWidth = inline ? sideWidth : width;

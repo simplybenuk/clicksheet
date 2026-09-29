@@ -7,6 +7,7 @@ import {
   ExportTooLargeError,
   layoutContactSheet,
   MAX_CANVAS_SIDE,
+  MIN_IMAGE_WIDTH,
   sanitizePathname,
   wrapText
 } from "../extension/core/export-layout.js";
@@ -248,7 +249,31 @@ test("the brand mark shares the title row on wide sheets and takes its own row o
   assert.ok(narrow.title.y >= narrow.brand.y + narrow.brand.height);
   assert.equal(narrow.title.width, narrow.width);
   assert.equal(narrow.brand.x + narrow.brand.width, narrow.x + narrow.width);
-  assert.equal(narrow.brand.line.text, BRAND_LINE);
+  assert.deepEqual(narrow.brand.line.lines, [BRAND_LINE]);
+});
+
+test("on the narrowest sheets the brand line splits in two and the icon grows with it", () => {
+  // A slightly wider sheet with the same font sizes keeps one line.
+  const wide = layoutContactSheet(frames(1, { width: 400, height: 400 }), header()).header.brand;
+  assert.deepEqual(wide.line.lines, [BRAND_LINE]);
+  const layout = layoutContactSheet(frames(1, { width: MIN_IMAGE_WIDTH, height: 400 }), header("Flow", "Short."));
+  const { brand, title, description } = layout.header;
+
+  assert.equal(layout.imageWidth, MIN_IMAGE_WIDTH);
+  assert.deepEqual(brand.line.lines, BRAND_LINE.split(" · "));
+  assert.deepEqual(brand.line.lines, ["Chrome extension", "github.com/simplybenuk/clicksheet"]);
+  assert.equal(brand.iconSize, brand.name.lineHeight + 2 * brand.line.lineHeight);
+  assert.equal(brand.height, brand.iconSize);
+  assert.ok(brand.height > wide.height);
+  // Each line fits beside the icon at the layout's glyph estimate.
+  const room = brand.width - brand.iconSize - brand.iconGap;
+  assert.ok(brand.line.lines.every((text) => text.length * brand.line.fontSize * 0.6 <= room));
+  assert.equal(brand.x + brand.width, layout.header.x + layout.header.width);
+  // Own row: the taller mark pushes the title, description and grid down.
+  assert.ok(title.y >= brand.y + brand.height);
+  assert.equal(layout.header.height, description.y + description.lines.length * description.lineHeight - layout.header.y);
+  assert.equal(layout.cells[0].y, layout.header.y + layout.header.height + layout.metrics.lineHeight);
+  assert.equal(layout.height, layout.cells[0].y + layout.cellHeight + layout.metrics.margin);
 });
 
 test("the header counts toward the canvas limits", () => {
