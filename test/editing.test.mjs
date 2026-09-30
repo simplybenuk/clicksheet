@@ -107,8 +107,44 @@ test("Save writes the image and its context to Downloads by default and offers t
   assert.notEqual(second.fileName, saved.fileName);
   assert.equal(second.contextFileName, second.fileName.replace(/\.png$/, ".json"));
 
-  const dismissed = await coordinator.request(1, { action: "dismiss-export", journeyId: id });
+  const dismissed = await coordinator.request(1, { action: "dismiss-export", journeyId: id, downloadId: 2 });
   assert.equal(dismissed.lastExport, null);
+});
+
+test("a ✕ for an older bar is ignored, so a queued close never removes a newer bar", async () => {
+  const { coordinator, id } = await withFrames(1);
+  const first = await coordinator.request(1, { action: "export", journeyId: id, destination: "save" });
+  // The user clicks Save, then the old bar's ✕ while the save runs; the ✕
+  // reaches the worker after the new save has finished.
+  const second = await coordinator.request(1, { action: "export", journeyId: id, destination: "save" });
+  assert.notEqual(second.lastExport.downloadId, first.lastExport.downloadId);
+  const stale = await coordinator.request(1, { action: "dismiss-export", journeyId: id, asShown: true, downloadId: first.lastExport.downloadId });
+  assert.deepEqual(stale.lastExport, second.lastExport, "the new bar stays");
+  assert.deepEqual(await coordinator.lastExport(1), second.lastExport);
+  assert.deepEqual((await coordinator.request(1, { action: "dismiss-export", journeyId: id })).lastExport, second.lastExport, "a ✕ with no id closes nothing");
+  const closed = await coordinator.request(1, { action: "dismiss-export", journeyId: id, asShown: true, downloadId: second.lastExport.downloadId });
+  assert.equal(closed.lastExport, null);
+  assert.equal(await coordinator.lastExport(1), null);
+});
+
+test("a widget command for a Journey that is no longer shown is refused, not redirected", async () => {
+  const { coordinator, id, ids } = await withFrames(1);
+  const other = (await coordinator.request(1, { action: "new", journeyId: id, asShown: true })).currentJourney.id;
+  assert.notEqual(other, id);
+  // A Delete clicked while the first Journey was shown, run after "new".
+  await assert.rejects(coordinator.request(1, { action: "delete-frame", journeyId: id, asShown: true, frameId: ids[0] }),
+    /Another Journey was opened before this could run/);
+  await assert.rejects(coordinator.request(1, { action: "export", journeyId: id, asShown: true, destination: "save" }), /Another Journey was opened/);
+  const after = await coordinator.request(1, { action: "snapshot" });
+  assert.equal(after.currentJourney.id, other, "the tab stays on the Journey it shows");
+  assert.equal(after.lastExport, null);
+  // Commands for the shown Journey, and ones not about a Journey, still run.
+  const settings = await coordinator.request(1, { action: "export-settings", journeyId: id, asShown: true, destination: "library" });
+  assert.equal(settings.exportDestination, "library");
+  assert.equal(settings.currentJourney.id, other, "a stale command that is not about a Journey does not switch the tab back");
+  const reopened = await coordinator.request(1, { action: "open", journeyId: other, asShown: true, id });
+  assert.equal(reopened.currentJourney.id, id);
+  assert.deepEqual(reopened.currentJourney.frames.map((frame) => frame.id), ids, "the refused Delete removed nothing");
 });
 
 test("a failed Downloads save reports the error and shows no bar", async () => {

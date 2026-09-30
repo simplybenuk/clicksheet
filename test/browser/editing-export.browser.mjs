@@ -13,6 +13,38 @@ export async function run(t) {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: s.base });
   const action = (name) => toolbar.locator(`[data-action="${name}"]`);
   const order = async () => (await s.readJourney()).frames.map((f) => f.id);
+  // Holds the next worker request named `match` (for example "export:save")
+  // until release(), so a test can make the widget busy without depending on
+  // timing, and logs the commands the worker receives. Callers release in a
+  // finally block so a failed step cannot leave the worker held.
+  async function holdNext(match) {
+    await worker.evaluate((match) => {
+      const journeys = globalThis.__journeys;
+      globalThis.__unheldRequest ??= journeys.request;
+      const original = globalThis.__unheldRequest;
+      let release;
+      const gate = new Promise((done) => { release = done; });
+      globalThis.__releaseHeld = release;
+      globalThis.__held = false;
+      globalThis.__commandLog = [];
+      journeys.request = async (tabId, command, ...rest) => {
+        const name = [command?.action, command?.destination].filter(Boolean).join(":");
+        if (!["thumbnail", "view-frame"].includes(command?.action)) globalThis.__commandLog.push(name);
+        if (!globalThis.__held && name === match) { globalThis.__held = true; await gate; }
+        return original.call(journeys, tabId, command, ...rest);
+      };
+    }, match);
+    return {
+      held: () => until(() => worker.evaluate(() => globalThis.__held), Boolean, 5000),
+      log: () => worker.evaluate(() => globalThis.__commandLog),
+      release: () => worker.evaluate(() => globalThis.__releaseHeld?.()),
+      restore: () => worker.evaluate(() => {
+        globalThis.__releaseHeld?.();
+        if (globalThis.__unheldRequest) globalThis.__journeys.request = globalThis.__unheldRequest;
+      })
+    };
+  }
+  const idle = () => until(() => action("export").isDisabled(), (disabled) => !disabled, 8000);
   await s.open();
   await s.newJourney();
   check("Export is disabled for an empty Journey", await action("export").isDisabled());
@@ -133,6 +165,34 @@ export async function run(t) {
   await worker.evaluate((id) => chrome.downloads.removeFile(id), image.id);
   await barFrame.locator('[data-action="show"]').click();
   check("a moved or deleted file is reported", /moved or deleted/.test(await until(barText, (text) => /moved or deleted/.test(text))), await barText());
+  // The old bar's ✕ clicked while a new Save runs waits its turn, then must
+  // not close the new bar or hide the Save's result (it names the old bar).
+  // Bring focus back from the bar's frame first; the focus refresh that
+  // causes must finish before Export can be opened.
+  await toolbar.locator('[data-role="message"]').click();
+  await idle();
+  const saving = await holdNext("export:save");
+  let busyAtDismiss = false;
+  let heldSave = false;
+  try {
+    await action("export").click();
+    await action("save-export").click();
+    heldSave = await saving.held();
+    busyAtDismiss = await action("export").isDisabled();
+    await action("dismiss-export").click();
+  } finally {
+    await saving.release();
+  }
+  const newName = await until(async () => (await s.message()).match(/^Saved (\S+) and \S+ in Downloads\/Clicksheet/)?.[1], (name) => name && name !== savedName, 15000);
+  const saveThenDismiss = await until(saving.log, (log) => log.includes("dismiss-export"));
+  await idle();
+  await saving.restore();
+  check("a ✕ clicked during a Save is queued behind it",
+    heldSave && busyAtDismiss && saveThenDismiss.filter((name) => name !== "snapshot").join() === "export:save,dismiss-export",
+    `held: ${heldSave}; busy: ${busyAtDismiss}; ${saveThenDismiss.join()}`);
+  check("the queued ✕ for the old bar leaves the new save's bar",
+    await bar.isVisible() && await until(barText, (text) => text === newName) === newName, `${newName}: ${await barText().catch((error) => error.message)}`);
+  check("the Save result is still shown after the queued ✕ ran", (await s.message()).startsWith(`Saved ${newName} and`), await s.message());
   // Straight after a click in the bar, as a person would: the window regains
   // focus and refreshes as this click lands, and the click must still count.
   await action("dismiss-export").click();
@@ -179,15 +239,34 @@ export async function run(t) {
     `${await s.message()} ${JSON.stringify(copiedContext)?.slice(0, 120)}`);
   // A copy clicked while a focus refresh runs waits its turn instead of being
   // lost. The clipboard is cleared first so only this copy can fill it.
+  // The refresh is held in the worker, so the widget is certainly busy at
+  // the click. A second command (the hidden bar's ✕, which closes nothing)
+  // is queued behind the copy to check the order.
   await page.evaluate(() => navigator.clipboard.writeText(""));
+  await idle();
   await action("export").click();
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  const busyAtClick = await action("export").isDisabled();
-  await action("copy-context").click();
+  const refresh = await holdNext("snapshot");
+  let heldRefresh = false;
+  let busyAtClick = false;
+  try {
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    heldRefresh = await refresh.held();
+    busyAtClick = await action("export").isDisabled();
+    await action("copy-context").click();
+    await action("dismiss-export").dispatchEvent("click");
+  } finally {
+    await refresh.release();
+  }
+  check("the widget is busy with a refresh when Copy context is clicked", heldRefresh && busyAtClick, `held: ${heldRefresh}; busy: ${busyAtClick}`);
   await s.messageMatches(/Copied the step context|could not be copied/);
+  const queuedOrder = await until(refresh.log, (log) => log.includes("dismiss-export"));
+  await idle();
+  await refresh.restore();
   const queuedCopy = await page.evaluate(() => navigator.clipboard.readText()).then(JSON.parse, () => null);
-  check("Copy context clicked during a refresh still copies", queuedCopy?.format === "clicksheet-context",
-    `busy at click: ${busyAtClick}; ${await s.message()}`);
+  check("Copy context clicked during a refresh still copies", queuedCopy?.format === "clicksheet-context", await s.message());
+  check("queued commands run in click order after the refresh",
+    queuedOrder[0] === "snapshot" && queuedOrder.filter((name) => name !== "snapshot").join() === "export:context,dismiss-export", queuedOrder.join());
+  check("the copy's result stays after the queued command that followed it", /^Copied the step context/.test(await s.message()), await s.message());
 
   // Unsupported page: the action explains itself instead of injecting.
   const internal = await context.newPage();

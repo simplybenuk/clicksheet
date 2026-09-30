@@ -33,7 +33,7 @@ export function createDownloadsExporter({
       try {
         contextItem = await download(contextUrl, `${folder}/${pairBase}.json`);
       } catch {
-        throw new Error(`Saved ${fileName} in ${place}, but its context file could not be saved. Save again to get both files.`);
+        throw new Error(`${onDisk({ image: fileName })}, but its context file could not be saved. Save again to get both files.`);
       }
       const contextFileName = leafName(contextItem.filename);
       if (contextFileName === `${pairBase}.json`) return { downloadId: saved.id, fileName, contextFileName };
@@ -41,12 +41,22 @@ export function createDownloadsExporter({
       // browser automation, which uses random names). Another base would be
       // overridden the same way, so the names Chrome used are reported as is.
       if (!namedByUniquify(fileName, base, ".png")) return { downloadId: saved.id, fileName, contextFileName };
-      const removed = await Promise.all([discard(contextItem.id), discard(saved.id)]);
-      if (!removed.every(Boolean)) {
-        throw new Error(`Saved ${fileName} and its context as ${contextFileName} in ${place}, but the names do not match because an older file is in the way. Rename or remove the older file and save again.`);
+      const [contextRemoved, imageRemoved] = await Promise.all([discard(contextItem.id), discard(saved.id)]);
+      if (!contextRemoved || !imageRemoved) {
+        const left = { image: imageRemoved ? null : fileName, context: contextRemoved ? null : contextFileName };
+        throw new Error(`${onDisk(left)}, but the image and context names did not match because an older file is in the way, and Clicksheet could not remove ${left.image && left.context ? "the mismatched pair" : "it"}. Rename or remove the older file and save again.`);
       }
     }
-    throw new Error(`Clicksheet could not find a name free for both files in ${place}. Rename or remove older ${name} files and save again.`);
+    throw new Error(`${onDisk({})}: Clicksheet could not find a name free for both files. Rename or remove older ${name} files and save again.`);
+  }
+
+  // The one description of what a failed save left on disk, so every error
+  // names exactly the files that remain and never one that was removed.
+  function onDisk({ image = null, context = null }) {
+    if (image && context) return `Saved ${image} and its context as ${context} in ${place}`;
+    if (image) return `Saved ${image} in ${place}`;
+    if (context) return `Only the context file ${context} is left in ${place}`;
+    return `Nothing was saved in ${place}`;
   }
 
   async function discard(id) {

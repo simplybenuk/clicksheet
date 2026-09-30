@@ -72,7 +72,31 @@ test("a stray context file with the image's name moves the pair to a name free f
 test("a mismatched pair that cannot be removed is reported, never presented as a normal save", async () => {
   const api = fakeChromeDownloads({ existing: ["Clicksheet/flow-2026-09-30-1200.json"], removable: () => false });
   await assert.rejects(createDownloadsExporter({ api, toDataUrl }).save(pair),
-    /Saved flow-2026-09-30-1200\.png and its context as flow-2026-09-30-1200 \(1\)\.json .* names do not match/);
+    /^Error: Saved flow-2026-09-30-1200\.png and its context as flow-2026-09-30-1200 \(1\)\.json in Downloads\/Clicksheet, but the image and context names did not match/);
+});
+
+// After a mismatch, each error must name exactly the files still on disk.
+for (const [label, removable, expected, gone] of [
+  ["the image was removed but the context was not", (item) => item.filename.endsWith(".png"),
+    /^Error: Only the context file flow-2026-09-30-1200 \(1\)\.json is left in Downloads\/Clicksheet, but/, "flow-2026-09-30-1200.png"],
+  ["the context was removed but the image was not", (item) => item.filename.endsWith(".json"),
+    /^Error: Saved flow-2026-09-30-1200\.png in Downloads\/Clicksheet, but/, "flow-2026-09-30-1200 (1).json"]
+]) {
+  test(`a partial clean-up where ${label} names only the file that remains`, async () => {
+    const api = fakeChromeDownloads({ existing: ["Clicksheet/flow-2026-09-30-1200.json"], removable });
+    const error = await createDownloadsExporter({ api, toDataUrl }).save(pair).then(() => null, (failure) => failure);
+    assert.match(String(error), expected);
+    assert.ok(!error.message.includes(gone), `the removed ${gone} is not named`);
+    for (const file of api.files) if (!file.endsWith("1200.json")) assert.ok(error.message.includes(file.replace("Clicksheet/", "")), `${file} remains and is named`);
+  });
+}
+
+test("when both mismatched files are removed and no name is free, the error names no file and says nothing was saved", async () => {
+  const existing = ["", "-2", "-3", "-4", "-5"].map((suffix) => `Clicksheet/flow-2026-09-30-1200${suffix}.json`);
+  const api = fakeChromeDownloads({ existing });
+  const error = await createDownloadsExporter({ api, toDataUrl }).save(pair).then(() => null, (failure) => failure);
+  assert.match(error.message, /^Nothing was saved in Downloads\/Clicksheet: /);
+  assert.ok(!/\.png|\(1\)\.json/.test(error.message), "no removed file is named");
 });
 
 test("with no name free for both after several tries, the save fails with guidance", async () => {

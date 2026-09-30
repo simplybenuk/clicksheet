@@ -467,7 +467,7 @@
       view = result.view;
       elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
       elapsedAt = performance.now();
-      if (view.notice) notice = view.notice;
+      if (view.notice) showResult(view.notice);
       return view;
     });
     requestTail = pending.catch(() => {});
@@ -503,28 +503,47 @@
     saveFailed = false;
     savedRevision = Math.max(savedRevision, revision);
   }
-  // Every user command goes through this one gate. A command that arrives
-  // while another runs (for example a click that lands as a focus refresh
-  // starts, after using the export bar) waits in order instead of being
-  // dropped or replacing an earlier one. Background refreshes are not queued:
-  // one already running, or `refreshQueued`, covers them.
+  // Every user command goes through this one gate and runs in click order.
+  // What a command acts on is fixed at the click: it carries the Journey then
+  // shown (`asShown`; the worker refuses it if another command changed the
+  // Journey meanwhile), and ✕ carries the bar's download id. Background
+  // refreshes are not queued: one already running, or `refreshQueued`,
+  // covers them.
+  // Results stay until the next result. A command may clear the message or
+  // show its pending text only if no result arrived after its click
+  // (`resultCount`), so a queued command never hides an outcome, such as a
+  // failed save, that the user has not had a chance to see.
   // `task.finish(result, failure)` lets a command report its own outcome, as
   // the clipboard copies do.
   const MAX_QUEUED = 8;
   const commandQueue = [];
-  function run(command, task = {}) {
-    if (busy) {
-      if (command.action === "snapshot") return;
-      if (commandQueue.length < MAX_QUEUED) commandQueue.push({ command, ...task });
-      else task.finish?.(undefined, new Error("Clicksheet is still busy. Try again in a moment."));
-      render();
-      return;
-    }
-    void execute({ command, ...task });
+  let resultCount = 0;
+  function showResult(text) {
+    notice = text;
+    resultCount++;
   }
-  async function execute({ command, finish = null, pending = "" }) {
+  function run(command, task = {}) {
+    if (command.action !== "snapshot" && view && !("journeyId" in command)) {
+      command = { journeyId: view.currentJourney?.id ?? null, asShown: true, ...command };
+    }
+    const entry = { command, ...task, clickedAt: resultCount };
+    if (!busy) { void execute(entry); return; }
+    if (command.action === "snapshot") return;
+    if (commandQueue.length < MAX_QUEUED) { commandQueue.push(entry); render(); return; }
+    void report(entry, undefined, new Error("Clicksheet is still busy. Try again in a moment.")).finally(render);
+  }
+  async function report({ finish = null }, result, failure) {
+    try {
+      if (finish) await finish(result, failure);
+      else if (failure) showResult(failure.message);
+    } catch (error) {
+      showResult(error?.message || String(error));
+    }
+  }
+  async function execute(entry) {
+    const { command, pending = "", clickedAt } = entry;
     busy = true;
-    if (command.action !== "snapshot") notice = pending;
+    if (command.action !== "snapshot" && resultCount === clickedAt) notice = pending;
     let failure = null;
     let result;
     render();
@@ -538,7 +557,7 @@
         role("name").value = view.currentJourney?.name ?? "";
         role("description").value = view.currentJourney?.description ?? "";
       }
-      if (command.action === "delete-frame") notice = "Screenshot deleted. Use Undo delete to restore it.";
+      if (command.action === "delete-frame") showResult("Screenshot deleted. Use Undo delete to restore it.");
       if (command.action === "undo-delete") selectedFrame = command.frameId ?? selectedFrame;
       // Recording is about the page, so the widget shrinks to its controls;
       // stopping brings back the strip for editing and export.
@@ -551,8 +570,7 @@
       }
     } catch (error) { failure = error; }
     try {
-      if (finish) await finish(result, failure);
-      else if (failure) notice = failure.message;
+      await report(entry, result, failure);
     } finally {
       busy = false;
       render();
@@ -927,9 +945,9 @@
           try { deliver.resolve(toBlob(result)); } catch (error) { deliver.reject(error); failure = error; }
         }
         const [clipboard] = await Promise.allSettled([copied]);
-        if (failure) notice = failure.message;
-        else if (clipboard.status === "rejected") notice = failed;
-        else notice = done;
+        if (failure) showResult(failure.message);
+        else if (clipboard.status === "rejected") showResult(failed);
+        else showResult(done);
       }
     });
     render();
@@ -1196,7 +1214,7 @@
   action("copy-image").addEventListener("click", copyImage);
   action("copy-context").addEventListener("click", copyContext);
   action("save-export").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "save" }); });
-  action("dismiss-export").addEventListener("click", () => void run({ action: "dismiss-export" }));
+  action("dismiss-export").addEventListener("click", () => void run({ action: "dismiss-export", downloadId: view?.lastExport?.downloadId ?? null }));
   role("export-destination").addEventListener("change", () => void run({ action: "export-settings", destination: role("export-destination").value }));
   role("settings-menu").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1257,7 +1275,7 @@
     }
     if (message?.type === "clicksheet:notice") {
       // A failed shortcut capture must be visible even if the toolbar was hidden.
-      notice = String(message.text ?? "");
+      showResult(String(message.text ?? ""));
       root.hidden = false;
       render();
     }

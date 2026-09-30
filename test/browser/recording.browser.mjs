@@ -63,7 +63,7 @@ export async function run(t) {
   const other = await s.context.newPage();
   await other.goto(`${s.base}/?other`);
   await other.bringToFront();
-  const paused = await until(async () => { const j = await s.readJourney(); return `${j.state}/${j.pauseReason}`; }, (v) => v === "Paused/tab");
+  const paused = await until(async () => { const j = await s.readJourney(); return `${j?.state}/${j?.pauseReason}`; }, (v) => v === "Paused/tab");
   check("switching tabs pauses the Journey", paused === "Paused/tab", paused);
   await page.bringToFront();
   await page.waitForFunction(() => document.querySelector("clicksheet-toolbar")?.shadowRoot

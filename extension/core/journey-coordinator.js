@@ -24,6 +24,10 @@ import { applyMasks } from "./redaction.js";
 export const CLICK_WINDOW_MS = 2500;
 const REENTRY_REASONS = new Set(["permission", "navigation"]);
 // Any of these ends the one-step Undo window for a deleted screenshot.
+// Commands that do not act on the shown Journey: a stale widget command of
+// this kind still runs, on the tab's current Journey (dismiss-export checks
+// its own download id).
+const SHOWN_EXEMPT = new Set(["snapshot", "export-settings", "dismiss-export"]);
 const ENDS_UNDO = new Set(["delete-frame", "move-frame", "redact", "record", "resume", "capture", "stop", "new", "open", "settings"]);
 const CAPTURE_AREAS = new Set(["viewport", "fullPage"]);
 const COPY_LIMIT_BYTES = 45 * 1024 * 1024;
@@ -419,12 +423,23 @@ export function createJourneyCoordinator({
       state.released = null;
       await persist();
     }
-    if (root && ENDS_UNDO.has(command.action)) await endUndo(root);
     // An explicit id that no longer exists (folder removed by hand) must not
     // silently redirect a capture or edit into another Journey.
     if (command.journeyId && !find(view, command.journeyId) && !["snapshot", "open", "new"].includes(command.action)) {
       throw new Error(view.available ? "Journey not found. Reopen it from Journeys." : "Reconnect the storage folder on the Storage page, then try again.");
     }
+    // A widget command carries the Journey the user saw when they clicked
+    // (`asShown`). If another command changed the tab's Journey while it
+    // waited, it is refused rather than switching the tab back. (A shown
+    // Journey that was since removed is handled above, or by open and new.)
+    const shownId = find(view, state.selections[tabId]) ? state.selections[tabId] : view.journeys[0]?.id ?? null;
+    const sawExisting = command.journeyId == null || Boolean(find(view, command.journeyId));
+    if (command.asShown && sawExisting && (command.journeyId ?? null) !== shownId) {
+      if (!SHOWN_EXEMPT.has(command.action)) throw new Error("Another Journey was opened before this could run, so nothing was done. Try again.");
+      // Not about a Journey: it runs, but must not switch the tab back.
+      command = { ...command, journeyId: undefined };
+    }
+    if (root && ENDS_UNDO.has(command.action)) await endUndo(root);
     let id = command.journeyId ?? state.selections[tabId];
     if (!find(view, id)) id = view.journeys[0]?.id ?? null;
     if (state.selections[tabId] !== id) {
@@ -662,8 +677,12 @@ export function createJourneyCoordinator({
         exportDestination = (await exportSettings.save({ destination: command.destination })).destination;
         break;
       case "dismiss-export":
-        delete state.exports[tabId];
-        await persist();
+        // Only the bar the user closed: a ✕ that waited behind a new save
+        // must not remove the new bar.
+        if (state.exports[tabId] && state.exports[tabId].downloadId === command.downloadId) {
+          delete state.exports[tabId];
+          await persist();
+        }
         break;
       case "snapshot":
         break;
