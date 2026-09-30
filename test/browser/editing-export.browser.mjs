@@ -147,8 +147,8 @@ export async function run(t) {
   await action("settings").click();
   await action("export").click();
   await action("save-export").click();
-  await s.messageMatches(/Saved untitled-journey\.png and untitled-journey\.json in .*\/exports\./);
-  check("the Clicksheet folder destination names both files and where they are", /Saved untitled-journey\.png and untitled-journey\.json in .*\/exports\./.test(await s.message()), await s.message());
+  await s.messageMatches(/Saved untitled-journey\.png and untitled-journey\.json in (\S+\/exports|the exports folder of your Clicksheet folder)\./);
+  check("the Clicksheet folder destination names both files and where they are", /Saved untitled-journey\.png and untitled-journey\.json in (\S+\/exports|the exports folder of your Clicksheet folder)\./.test(await s.message()), await s.message());
   await action("export").click();
   await action("save-export").click();
   await s.messageMatches(/untitled-journey-2\.png/);
@@ -177,6 +177,17 @@ export async function run(t) {
   check("Copy context puts the Journey's context JSON on the clipboard",
     copiedContext?.format === "clicksheet-context" && copiedContext.steps.length === 4 && copiedContext.journey.title === journey.name,
     `${await s.message()} ${JSON.stringify(copiedContext)?.slice(0, 120)}`);
+  // A copy clicked while a focus refresh runs waits its turn instead of being
+  // lost. The clipboard is cleared first so only this copy can fill it.
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await action("export").click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const busyAtClick = await action("export").isDisabled();
+  await action("copy-context").click();
+  await s.messageMatches(/Copied the step context|could not be copied/);
+  const queuedCopy = await page.evaluate(() => navigator.clipboard.readText()).then(JSON.parse, () => null);
+  check("Copy context clicked during a refresh still copies", queuedCopy?.format === "clicksheet-context",
+    `busy at click: ${busyAtClick}; ${await s.message()}`);
 
   // Unsupported page: the action explains itself instead of injecting.
   const internal = await context.newPage();

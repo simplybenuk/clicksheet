@@ -178,7 +178,8 @@ export function attachInteraction(frame, click) {
     interaction: {
       type: "click",
       label: String(click.label ?? "").trim().slice(0, 80),
-      role: typeof click.role === "string" && click.role ? click.role.slice(0, 40) : null,
+      // A role is an ARIA token, never free page text, since it survives redaction.
+      role: typeof click.role === "string" && /^[a-z][a-z-]{0,39}$/.test(click.role) ? click.role : null,
       tag: typeof click.tag === "string" && /^[a-z][a-z0-9-]{0,39}$/.test(click.tag) ? click.tag : null,
       rect: { x: finite(rect.x, 0) + dx, y: finite(rect.y, 0) + dy, width: Math.max(0, finite(rect.width, 0)), height: Math.max(0, finite(rect.height, 0)) },
       point: click.point ? { x: finite(click.point.x, 0) + dx, y: finite(click.point.y, 0) + dy } : null

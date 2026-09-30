@@ -3,6 +3,9 @@
 // step numbers and boxes match the PNG exactly.
 
 import { sanitizePathname } from "./export-layout.js";
+import { interactionBox, interactionScale, visibleInteractionName } from "./interaction-name.js";
+
+export { hiddenByRedaction } from "./interaction-name.js";
 
 export const CONTEXT_FORMAT = "clicksheet-context";
 export const CONTEXT_VERSION = 1;
@@ -54,42 +57,26 @@ export function buildContext(journey, layout, { exportedAt, version }) {
 
 // Box and point are converted from CSS px (as captured) to screenshot px, the
 // space redaction boxes are stored in. The accessible name is dropped when a
-// redaction box may cover the target (FR-C2.3).
+// redaction box may cover the target (FR-C2.3); the sheet caption follows the
+// same rule.
 function describeInteraction(frame) {
   const interaction = frame.interaction;
   if (!interaction) return null;
-  const viewportWidth = frame.viewport?.width;
-  const imageWidth = frame.image?.width;
-  const scale = viewportWidth > 0 && imageWidth > 0 ? imageWidth / viewportWidth : 1;
-  const rect = interaction.rect;
-  const box = rect ? roundBox({ x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale }) : null;
+  const scale = interactionScale(frame);
+  const box = interactionBox(frame);
   const point = interaction.point && Number.isFinite(interaction.point.x) && Number.isFinite(interaction.point.y)
     ? { x: Math.round(interaction.point.x * scale), y: Math.round(interaction.point.y * scale) }
     : null;
-  const name = String(interaction.label ?? "").trim();
   return {
     type: interaction.type ?? "click",
-    name: name && !hiddenByRedaction(frame, box) ? name : null,
-    role: interaction.role ?? null,
+    name: visibleInteractionName(frame) || null,
+    // Checked again here so a frame stored with free text as its role never
+    // exports it.
+    role: typeof interaction.role === "string" && /^[a-z][a-z-]{0,39}$/.test(interaction.role) ? interaction.role : null,
     tag: interaction.tag ?? null,
-    box,
+    box: box ? roundBox(box) : null,
     point
   };
-}
-
-// A redacted frame without stored boxes was redacted before boxes were kept,
-// so any label on it may be hidden.
-export function hiddenByRedaction(frame, box) {
-  if (!frame.redacted) return false;
-  if (!Array.isArray(frame.masks)) return true;
-  if (!box) return frame.masks.length > 0;
-  // A zero-size target still sits somewhere, so it is tested as one pixel.
-  const target = { ...box, width: Math.max(1, box.width), height: Math.max(1, box.height) };
-  return frame.masks.some((mask) => overlaps(mask, target));
-}
-
-function overlaps(a, b) {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
 function roundBox(box) {

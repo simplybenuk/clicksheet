@@ -92,6 +92,45 @@ export async function run(t) {
     clickedStep.page.origin === s.base && clickedStep.page.pathname.startsWith("/") && context.steps.every((step) => Number.isFinite(step.sinceStartMs)),
     JSON.stringify(clickedStep));
   check("the context carries no query string or fragment", !/[?#]/.test(context.steps.map((step) => step.page.pathname).join("")) && !contextText.includes("token="));
+
+  // Redaction over a real click (AC-C1): draw a box in the editor over the
+  // button that was clicked, then read the context and the widget label.
+  await toolbar.locator('[data-action="stop"]').click();
+  await until(async () => (await s.readJourney())?.state, (state) => state === "Stopped");
+  await frames.nth(0).click();
+  const [editor] = await Promise.all([s.context.waitForEvent("page"), toolbar.locator('[data-action="edit"]').click()]);
+  editor.on("pageerror", (error) => s.errors.push(`editor: ${error.message}`));
+  await editor.waitForLoadState();
+  const canvas = editor.locator("canvas");
+  await canvas.waitFor();
+  await editor.waitForFunction(() => document.querySelector("canvas")?.getBoundingClientRect().height > 200);
+  const shown = await canvas.boundingBox();
+  const toCanvas = shown.width / first.image.width;
+  const rect = clicked.interaction.rect;
+  const [left, top] = [(rect.x * scale) * toCanvas, (rect.y * scale) * toCanvas];
+  const [right, bottom] = [((rect.x + rect.width) * scale) * toCanvas, ((rect.y + rect.height) * scale) * toCanvas];
+  await editor.mouse.move(shown.x + left - 4, shown.y + top - 4);
+  await editor.mouse.down();
+  await editor.mouse.move(shown.x + right + 4, shown.y + bottom + 4, { steps: 5 });
+  await editor.mouse.up();
+  const closed = editor.waitForEvent("close", { timeout: 8000 }).then(() => true, () => false);
+  await editor.getByRole("button", { name: /apply/i }).click();
+  check("the editor applies a box over the clicked button", await closed);
+  const redactedJourney = await until(s.readJourney, (j) => j?.frames[0]?.redacted === true);
+  check("the box is stored on the frame", redactedJourney.frames[0].masks?.length === 1, JSON.stringify(redactedJourney.frames[0].masks));
+  const redactedContext = JSON.parse(await worker.evaluate(async (base) => {
+    const [tab] = await chrome.tabs.query({ url: `${base}/*` });
+    return (await globalThis.__journeys.request(tab.id, { action: "export", destination: "context" })).context;
+  }, s.base));
+  const covered = redactedContext.steps[0].interaction;
+  check("a box over the clicked button removes only its name from the context",
+    redactedContext.steps[0].redacted === true && covered?.name === null && covered.role === "button" && covered.tag === "button" && covered.box?.width > 0 &&
+    redactedContext.steps.some((step, index) => index > 0 && step.interaction?.name === "Load details"),
+    JSON.stringify(covered));
+  await page.bringToFront();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const coveredLabel = await until(() => frames.nth(0).textContent(), (text) => !text.includes("Load details"));
+  check("the widget labels the redacted step as a plain Click", /^1\. Click$/.test(coveredLabel.trim()), coveredLabel);
   check("no request left the machine while recording", seen > 0 && external.length === 0, `${seen} requests seen; external: ${external.slice(0, 3).join(" ") || "none"}`);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

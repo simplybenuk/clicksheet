@@ -67,4 +67,8 @@ test("frames keep the page origin, and clicks keep the target's role and tag", (
   const odd = attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, role: "", tag: "<script>", pathname: "/a" });
   assert.equal(odd.interaction.role, null);
   assert.equal(odd.interaction.tag, null);
+  for (const role of ["Pay £40 to Jane", "button ", "a".repeat(41), "menu item"]) {
+    assert.equal(attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, role, pathname: "/a" }).interaction.role, null, role);
+  }
+  assert.equal(attachInteraction(frame, { rect: { x: 1, y: 1, width: 1, height: 1 }, role: "menuitemcheckbox", pathname: "/a" }).interaction.role, "menuitemcheckbox");
 });

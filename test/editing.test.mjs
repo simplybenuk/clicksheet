@@ -118,6 +118,35 @@ test("a failed Downloads save reports the error and shows no bar", async () => {
   assert.equal((await coordinator.request(1, { action: "snapshot" })).lastExport, null);
 });
 
+test("a save that fails after an earlier success leaves no bar from the earlier save", async () => {
+  const { coordinator, id, options } = await withFrames(1);
+  const first = await coordinator.request(1, { action: "export", journeyId: id, destination: "save" });
+  assert.ok(first.lastExport, "the first save shows its bar");
+  options.downloads.fail = "Chrome could not save flow.png.";
+  await assert.rejects(coordinator.request(1, { action: "export", journeyId: id, destination: "save" }), /could not save/);
+  assert.equal(await coordinator.lastExport(1), null);
+  assert.equal((await coordinator.request(1, { action: "snapshot" })).lastExport, null);
+});
+
+test("a Clicksheet folder save that fails also removes an earlier Downloads bar", async () => {
+  let failRender = false;
+  const env = setup({ renderSheet: async () => {
+    if (failRender) throw new Error("The contact sheet could not be drawn.");
+    return new Blob(["sheet"], { type: "image/png" });
+  } });
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "capture", journeyId: id }, env.context);
+  assert.ok((await env.coordinator.request(1, { action: "export", journeyId: id, destination: "save" })).lastExport);
+  await env.coordinator.request(1, { action: "export-settings", journeyId: id, destination: "library" });
+  failRender = true;
+  await assert.rejects(env.coordinator.request(1, { action: "export", journeyId: id, destination: "save" }), /could not be drawn/);
+  assert.equal(await env.coordinator.lastExport(1), null);
+  // The cleared bar was persisted, so a restarted worker does not bring it back.
+  const restarted = setup({ volume: env.volume, bindings: env.options.bindings, exportSettings: env.options.exportSettings });
+  assert.equal(await restarted.coordinator.lastExport(1), null);
+});
+
 test("the Clicksheet folder destination saves the pair in exports/ and is remembered", async () => {
   const { coordinator, id, volume, options } = await withFrames(2);
   let view = await coordinator.request(1, { action: "export-settings", journeyId: id, destination: "library" });

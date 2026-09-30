@@ -107,3 +107,27 @@ test("zero-size targets under a box are still treated as hidden", () => {
   assert.equal(hiddenByRedaction(base, { x: 40, y: 40, width: 0, height: 0 }), false);
   assert.equal(hiddenByRedaction({ redacted: false }, { x: 15, y: 15, width: 1, height: 1 }), false);
 });
+
+test("a redacted frame whose boxes are empty or unreadable hides the name", () => {
+  const target = { x: 15, y: 15, width: 5, height: 5 };
+  assert.equal(hiddenByRedaction({ redacted: true, masks: [] }, target), true, "empty list");
+  assert.equal(hiddenByRedaction({ redacted: true, masks: [{ x: 90, y: 90 }] }, target), true, "a box without a size");
+  assert.equal(hiddenByRedaction({ redacted: true, masks: [{ x: 90, y: 90, width: 5, height: 5 }] }, null), true, "no target box");
+  assert.equal(hiddenByRedaction({ redacted: true, masks: [{ x: 90, y: 90, width: 5, height: 5 }] }, target), false);
+
+  const emptied = frame(1, { interaction: click("Pay"), redacted: true, masks: [] });
+  const { context } = build({ name: "Flow", frames: [emptied] });
+  assert.equal(context.steps[0].interaction.name, null);
+  assert.equal(context.steps[0].interaction.role, "button");
+});
+
+test("the sheet caption and the context agree on which names are hidden", () => {
+  const covered = frame(1, { interaction: click("Pay now"), redacted: true, masks: [{ x: 250, y: 90, width: 20, height: 20 }] });
+  const elsewhere = frame(2, { interaction: click("Save"), redacted: true, masks: [{ x: 0, y: 1000, width: 50, height: 50 }] });
+  const unknown = frame(3, { interaction: click("Card number"), redacted: true });
+  const plain = frame(4, { interaction: click("Next") });
+  const { layout, context } = build({ name: "Flow", frames: [covered, elsewhere, unknown, plain] });
+  const captions = layout.cells.map((cell) => cell.lines.find((line) => line.role === "interaction").text);
+  assert.deepEqual(captions, ["Click", 'Click "Save"', "Click", 'Click "Next"']);
+  assert.deepEqual(context.steps.map((step) => step.interaction.name), [null, "Save", null, "Next"]);
+});

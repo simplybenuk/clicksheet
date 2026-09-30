@@ -240,7 +240,8 @@
     action("stop").hidden = !active;
     for (const name of ["record", "pause", "resume", "stop", "capture"]) action(name).disabled = busy || !controls[name];
     action("export").disabled = busy || !view?.canExport;
-    if (action("export").disabled) toggleMenu("export-menu", false);
+    // A busy widget keeps an open menu: its commands wait their turn in run().
+    if (!view?.canExport) toggleMenu("export-menu", false);
     const frames = journey?.frames ?? [];
     const selectedIndex = frames.findIndex((frame) => frame.id === selectedFrame);
     if (selectedIndex === -1) selectedFrame = null;
@@ -502,24 +503,34 @@
     saveFailed = false;
     savedRevision = Math.max(savedRevision, revision);
   }
-  // A click that lands while a background refresh runs (the window regains
-  // focus as the click arrives, for example after using the export bar) is run
-  // straight after it rather than dropped.
-  let runningAction = null;
-  let queuedCommand = null;
-  async function run(command) {
+  // Every user command goes through this one gate. A command that arrives
+  // while another runs (for example a click that lands as a focus refresh
+  // starts, after using the export bar) waits in order instead of being
+  // dropped or replacing an earlier one. Background refreshes are not queued:
+  // one already running, or `refreshQueued`, covers them.
+  // `task.finish(result, failure)` lets a command report its own outcome, as
+  // the clipboard copies do.
+  const MAX_QUEUED = 8;
+  const commandQueue = [];
+  function run(command, task = {}) {
     if (busy) {
-      if (runningAction === "snapshot" && command.action !== "snapshot") queuedCommand = command;
+      if (command.action === "snapshot") return;
+      if (commandQueue.length < MAX_QUEUED) commandQueue.push({ command, ...task });
+      else task.finish?.(undefined, new Error("Clicksheet is still busy. Try again in a moment."));
+      render();
       return;
     }
+    void execute({ command, ...task });
+  }
+  async function execute({ command, finish = null, pending = "" }) {
     busy = true;
-    runningAction = command.action;
-    if (command.action !== "snapshot") notice = "";
+    if (command.action !== "snapshot") notice = pending;
     let failure = null;
+    let result;
     render();
     try {
       await flushEdits();
-      await request(command);
+      result = await request(command);
       if (command.action === "open" || command.action === "new") {
         selectedFrame = null;
         role("library").hidden = true;
@@ -539,16 +550,15 @@
         requestAnimationFrame(() => { strip.scrollLeft = strip.scrollWidth; });
       }
     } catch (error) { failure = error; }
-    finally {
+    try {
+      if (finish) await finish(result, failure);
+      else if (failure) notice = failure.message;
+    } finally {
       busy = false;
-      runningAction = null;
-      if (failure) notice = failure.message;
       render();
-      if (queuedCommand) {
-        const next = queuedCommand;
-        queuedCommand = null;
-        void run(next);
-      } else if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
+      const next = commandQueue.shift();
+      if (next) void execute(next);
+      else if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
     }
   }
 
@@ -662,8 +672,10 @@
     ["option", "option"], ["img[alt]:not([alt=''])", "img"]
   ];
   function targetRole(element) {
-    const explicit = element.getAttribute("role")?.trim().split(/\s+/)[0];
-    if (explicit) return explicit.slice(0, 40);
+    // An explicit role must look like an ARIA role token; anything else is
+    // page text, which would survive redaction, so it is dropped.
+    const explicit = element.getAttribute("role")?.trim().split(/\s+/)[0]?.toLowerCase();
+    if (explicit) return /^[a-z][a-z-]{0,39}$/.test(explicit) ? explicit : null;
     return IMPLICIT_ROLES.find(([selector]) => element.matches(selector))?.[1] ?? null;
   }
   function describeTarget(element) {
@@ -884,48 +896,63 @@
     const frame = role("export-bar-frame");
     if (frame.dataset.downloadId !== String(saved.downloadId)) {
       frame.dataset.downloadId = String(saved.downloadId);
+      // `?download=` only changes the URL so the frame reloads. The page never
+      // reads it: it asks the worker for this tab's latest export instead.
       frame.src = chrome.runtime.getURL(`pages/export-bar.html?download=${encodeURIComponent(saved.downloadId)}`);
     }
   }
-  function copyContext() {
-    if (busy) return;
+  // Copy must call the clipboard inside the click, so the clipboard is handed
+  // a promise straight away and the export itself goes through the command
+  // gate like every other action. If the widget is busy the copy waits its
+  // turn, and the promise settles when it has run.
+  function copyToClipboard({ destination, type, pending, toBlob, failed, done }) {
     toggleMenu("export-menu", false);
-    busy = true;
-    notice = "Preparing the context…";
-    render();
-    const text = request({ action: "export", destination: "context" }).then((result) => new Blob([result.context], { type: "text/plain" }));
+    let deliver;
+    const content = new Promise((resolve, reject) => { deliver = { resolve, reject }; });
+    content.catch(() => {});
     let copied;
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("unsupported");
-      copied = navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]);
+      copied = navigator.clipboard.write([new ClipboardItem({ [type]: content })]);
     } catch (error) {
       copied = Promise.reject(error);
     }
-    Promise.allSettled([text, copied]).then(([context, clipboard]) => {
-      if (context.status === "rejected") notice = context.reason.message;
-      else if (clipboard.status === "rejected") notice = "The context could not be copied on this page. Use Save image and context instead.";
-      else notice = "Copied the step context as JSON. Paste it next to the contact sheet.";
-    }).finally(() => { busy = false; render(); });
+    copied.catch(() => {});
+    notice = pending;
+    run({ action: "export", destination }, {
+      pending,
+      async finish(result, failure) {
+        if (failure) deliver.reject(failure);
+        else {
+          try { deliver.resolve(toBlob(result)); } catch (error) { deliver.reject(error); failure = error; }
+        }
+        const [clipboard] = await Promise.allSettled([copied]);
+        if (failure) notice = failure.message;
+        else if (clipboard.status === "rejected") notice = failed;
+        else notice = done;
+      }
+    });
+    render();
+  }
+  function copyContext() {
+    copyToClipboard({
+      destination: "context",
+      type: "text/plain",
+      pending: "Preparing the context…",
+      toBlob: (result) => new Blob([result.context], { type: "text/plain" }),
+      failed: "The context could not be copied on this page. Use Save image and context instead.",
+      done: "Copied the step context as JSON. Paste it next to the contact sheet."
+    });
   }
   function copyImage() {
-    if (busy) return;
-    toggleMenu("export-menu", false);
-    busy = true;
-    notice = "Preparing the image…";
-    render();
-    const rendered = request({ action: "export", destination: "copy" }).then((result) => pngFromDataUrl(result.image));
-    let copied;
-    try {
-      if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("unsupported");
-      copied = navigator.clipboard.write([new ClipboardItem({ "image/png": rendered })]);
-    } catch (error) {
-      copied = Promise.reject(error);
-    }
-    Promise.allSettled([rendered, copied]).then(([image, clipboard]) => {
-      if (image.status === "rejected") notice = image.reason.message;
-      else if (clipboard.status === "rejected") notice = "The image could not be copied on this page. Use Save image and context instead.";
-      else notice = "Copied the contact sheet. Paste it into your agent or issue.";
-    }).finally(() => { busy = false; render(); });
+    copyToClipboard({
+      destination: "copy",
+      type: "image/png",
+      pending: "Preparing the image…",
+      toBlob: (result) => pngFromDataUrl(result.image),
+      failed: "The image could not be copied on this page. Use Save image and context instead.",
+      done: "Copied the contact sheet. Paste it into your agent or issue."
+    });
   }
   function toggleMenu(name, open) {
     const menu = role(name);

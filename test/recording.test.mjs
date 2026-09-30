@@ -447,3 +447,20 @@ test("switching to a library without the bound Journey releases the recording bi
   assert.equal(view.recordingElsewhere, false);
   assert.equal(view.controls.record, true);
 });
+
+test("the widget labels a step whose clicked element is under a redaction box as a plain Click", async () => {
+  const env = setup({ redactImage: async (file, masks) => ({ blob: new Blob(["redacted"]), width: 200, height: 100, boxes: masks }) });
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "record", journeyId: id }, env.context);
+  env.browser.page.pathname = "/settings";
+  await env.coordinator.event(1, click("Pay Jane Doe"));
+  await env.coordinator.event(1, { type: "changed" });
+  await env.time.advance(500);
+  let view = await env.coordinator.request(1, { action: "stop", journeyId: id });
+  const frameId = view.currentJourney.frames[0].id;
+  assert.equal(view.currentJourney.frames[0].interaction.label, "Pay Jane Doe");
+  view = await env.coordinator.request(1, { action: "redact", journeyId: id, frameId, masks: [{ x: 0, y: 0, width: 200, height: 100 }] });
+  assert.equal(view.currentJourney.frames[0].interaction.label, "", "the strip and viewer show Click");
+  assert.equal(view.currentJourney.frames[0].interaction.rect.width, 20, "the rest of the click is kept");
+});

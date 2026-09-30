@@ -14,6 +14,7 @@ import { createCaptureScheduler, createRateGate } from "./capture-scheduler.js";
 import { headerText, renderContactSheet } from "./export-renderer.js";
 import { layoutContactSheet } from "./export-layout.js";
 import { buildContext } from "./export-context.js";
+import { visibleInteractionName } from "./interaction-name.js";
 import { exportTimestamp, slugifyJourneyName } from "./export-names.js";
 import { createExportSettings, memoryStorageArea } from "./export-settings.js";
 import { fullPageViewport, planFullPage, stitchSegments } from "./full-page.js";
@@ -612,6 +613,12 @@ export function createJourneyCoordinator({
           const copied = copyLayouts.get(current.id);
           return { ...present(tabId), context: contextFor(copied?.key === copyKey ? copied.layoutOptions : undefined) };
         }
+        // A new save replaces the bar from any earlier one before anything can
+        // fail, so a failed save never sits next to an older success (FR-C4.4).
+        if (command.destination === "save" && state.exports[tabId]) {
+          delete state.exports[tabId];
+          await persist();
+        }
         const load = async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile));
         // Full-width screenshots can exceed what Chrome will allocate, or what
         // a runtime message can carry for Copy (64 MiB, plus a third for
@@ -641,9 +648,7 @@ export function createJourneyCoordinator({
         const slug = slugifyJourneyName(current.name);
         if (exportDestination === "library") {
           const { fileName, contextFileName } = await storage.writeExportPair(slug, blob, contextFile);
-          delete state.exports[tabId];
-          await persist();
-          notices.set(tabId, `Saved ${fileName} and ${contextFileName} in ${view.folderName}/exports.`);
+          notices.set(tabId, `Saved ${fileName} and ${contextFileName} in ${view.folderName ? `${view.folderName}/exports` : "the exports folder of your Clicksheet folder"}.`);
           return { ...present(tabId), exported: { destination: "library", fileName, contextFileName } };
         }
         if (!downloads) throw new Error("Saving to Downloads is unavailable here. Choose the Clicksheet folder in Settings.");
@@ -702,6 +707,16 @@ export function createJourneyCoordinator({
     return controls;
   }
 
+  // The strip and viewer label a step the way the export does, so a name a
+  // redaction box hides is not printed next to the redacted screenshot.
+  function widgetJourney(journey) {
+    const prepared = prepareJourney(journey);
+    for (const frame of prepared.frames) {
+      if (frame.interaction) frame.interaction = { ...frame.interaction, label: visibleInteractionName(frame) };
+    }
+    return prepared;
+  }
+
   function present(tabId) {
     const view = session.snapshot();
     const state = memory;
@@ -711,7 +726,7 @@ export function createJourneyCoordinator({
     notices.delete(tabId);
     return {
       ...view,
-      currentJourney: selected ? prepareJourney(selected) : null,
+      currentJourney: selected ? widgetJourney(selected) : null,
       controls: selected ? libraryControls(journeyControls(prepareJourney(selected), { available: view.editable, captureReady }), selected, tabId, view) : {},
       recordingHere: state.recording?.tabId === tabId && state.recording.journeyId === selected?.id,
       recordingElsewhere: Boolean(state.recording && state.recording.tabId !== tabId),

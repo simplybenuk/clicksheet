@@ -21,7 +21,7 @@ Password fields are masked before a screenshot is saved. You can also draw redac
 
 ## Exports
 
-Each export is a contact-sheet image plus a context file (JSON) that lists every step's page title, site, path, capture time, and clicked element's name, role and tag. **Copy context** puts the same JSON on your clipboard. If a redaction box covers the element you clicked, its name is left out of the context file.
+Each export is a contact-sheet image plus a context file (JSON) that lists every step's page title, site, path, capture time, and clicked element's name, role and tag. **Copy context** puts the same JSON on your clipboard. If a redaction box covers the element you clicked, or the screenshot was redacted and Clicksheet cannot tell where, the element's name is left out of the context file and of the caption on the image, which then reads just "Click". The widget labels that step the same way. Page text is never used as an element's role.
 
 ## Where it is stored
 
