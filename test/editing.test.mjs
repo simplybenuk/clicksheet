@@ -375,3 +375,16 @@ test("the viewer loads a large preview of one screenshot in the selected Journey
   assert.deepEqual(sizes, [2000, 240]);
   await assert.rejects(env.coordinator.request(1, { action: "view-frame", journeyId: id, frameId: "missing" }), /not found/);
 });
+
+test("a Save that is refused still removes the earlier bar", async () => {
+  const { coordinator, id, options, volume } = await withFrames(1);
+  const first = await coordinator.request(1, { action: "export", journeyId: id, destination: "save" });
+  assert.ok(first.lastExport, "the first save shows its bar");
+  // Refused before anything is rendered: the Journey named is not there.
+  const refused = await coordinator.request(1, { action: "export", journeyId: "missing", asShown: true, destination: "save" }).catch((error) => error);
+  assert.match(refused.message, /not found/);
+  assert.equal(refused.view.lastExport, null, "the failure's view has no bar");
+  assert.equal(await coordinator.lastExport(1), null);
+  const restarted = setup({ volume, bindings: options.bindings, exportSettings: options.exportSettings });
+  assert.equal(await restarted.coordinator.lastExport(1), null, "and a restarted worker does not bring it back");
+});

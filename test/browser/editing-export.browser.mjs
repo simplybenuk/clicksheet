@@ -178,26 +178,29 @@ export async function run(t) {
   await worker.evaluate((id) => chrome.downloads.removeFile(id), image.id);
   await barFrame.locator('[data-action="show"]').click();
   check("a moved or deleted file is reported", /moved or deleted/.test(await until(barText, (text) => /moved or deleted/.test(text))), await barText());
-  // The old bar's ✕ clicked while a new Save runs waits its turn, then must
-  // not close the new bar or hide the Save's result (it names the old bar).
+  // A Save and then the old bar's ✕, both clicked while a refresh runs, wait
+  // their turn. The bar is still on screen for that ✕ (the Save has not
+  // started), and the ✕ must not close the new bar or hide the Save's result:
+  // it names the bar that was shown when it was clicked.
   // Bring focus back from the bar's frame first; the focus refresh that
   // causes must finish before Export can be opened.
   await toolbar.locator('[data-role="message"]').click();
   await idle();
-  const saving = await holdNext("export:save");
+  await action("export").click();
+  const saving = await holdNext("snapshot");
   let busyAtDismiss = false;
+  let barAtDismiss = false;
   let heldSave = false;
   let newName;
   let saveThenDismiss = [];
   try {
     try {
-      await action("export").click();
-      await action("save-export").click();
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       heldSave = await saving.held();
       busyAtDismiss = await action("export").isDisabled();
-      // The old bar is hidden once the Save starts, so its ✕ is clicked the
-      // way a click that was already on its way would land.
-      await action("dismiss-export").dispatchEvent("click");
+      await action("save-export").click();
+      barAtDismiss = await bar.isVisible();
+      await action("dismiss-export").click();
     } finally {
       await saving.release();
     }
@@ -207,9 +210,9 @@ export async function run(t) {
   } finally {
     await saving.restore();
   }
-  check("a ✕ clicked during a Save is queued behind it",
-    heldSave && busyAtDismiss && saveThenDismiss.filter((name) => name !== "snapshot").join() === "export:save,dismiss-export",
-    `held: ${heldSave}; busy: ${busyAtDismiss}; ${saveThenDismiss.join()}`);
+  check("a Save and the visible bar's ✕ clicked during a refresh are queued in click order",
+    heldSave && busyAtDismiss && barAtDismiss && saveThenDismiss[0] === "snapshot" && saveThenDismiss.filter((name) => name !== "snapshot").join() === "export:save,dismiss-export",
+    `held: ${heldSave}; busy: ${busyAtDismiss}; bar visible at the ✕: ${barAtDismiss}; ${saveThenDismiss.join()}`);
   check("the queued ✕ for the old bar leaves the new save's bar",
     await bar.isVisible() && await until(barText, (text) => text === newName) === newName, `${newName}: ${await barText().catch((error) => error.message)}`);
   check("the Save result is still shown after the queued ✕ ran", (await s.message()).startsWith(`Saved ${newName} and`), await s.message());

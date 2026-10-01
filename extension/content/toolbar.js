@@ -142,12 +142,25 @@
   let selectedFrame = null;
   let busy = false;
   let refreshQueued = false;
-  // The name and description share one pending-edit revision and debounce.
+  // Unsaved name and description text. Invariants (the worker holds I3):
+  // I1. Pending edits belong to the Journey they were typed in. `edits`
+  //     carries that Journey's id and the typed text from the input event on,
+  //     and a flush sends exactly those, never what the view shows later.
+  // I2. `edits` is non-null only while the widget's view can still be showing
+  //     that Journey. `adopt()` is the one place the view is replaced, and it
+  //     drops the edits (`dropEdits`) when the new view shows another Journey,
+  //     or none while storage is available. Dropped text is never sent
+  //     anywhere: the user is told, the fields are repainted from the view,
+  //     and nothing is left pending ("Saving", the unload prompt).
+  // I3. The worker refuses a rename or describe whose `journeyId` is missing
+  //     or is not the Journey the tab shows (journey-coordinator.js).
+  // I4. While storage is unavailable the view cannot contradict the edits, so
+  //     they stay held and are sent again, to the same id, after Reconnect.
+  // `edits` is null when nothing is unsaved, so "pending" has one meaning.
+  let edits = null; // { journeyId, values: { name?, description? }, revision }
   let editTimer = null;
-  let editRevision = 0;
-  let savedRevision = 0;
-  const editedFields = new Set();
   let saveFailed = false;
+  let fieldsJourney = null; // the Journey whose text the two fields show
   let notice = "";
   let requestTail = Promise.resolve();
   let flushTail = Promise.resolve();
@@ -212,14 +225,21 @@
   function render() {
     const journey = view?.currentJourney;
     const controls = view?.controls ?? {};
-    if (shadow.activeElement !== role("name") && savedRevision === editRevision) role("name").value = journey?.name ?? "";
-    if (shadow.activeElement !== role("description") && savedRevision === editRevision) role("description").value = journey?.description ?? "";
+    // With nothing pending, the fields show the view. A field being typed in
+    // is left alone, unless it still shows another Journey's text.
+    if (!edits) {
+      const shown = journey?.id ?? null;
+      for (const [field, text] of [["name", journey?.name ?? ""], ["description", journey?.description ?? ""]]) {
+        if (shadow.activeElement !== role(field) || fieldsJourney !== shown) role(field).value = text;
+      }
+      fieldsJourney = shown;
+    }
     role("name").disabled = busy || !journey || !view?.renamable;
     role("description").disabled = role("name").disabled;
     renderDescriptionCount();
     role("state").textContent = journey?.state ?? "Ready";
     renderElapsed();
-    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < editRevision ? "Saving" : view?.status ?? "";
+    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : edits ? "Saving" : view?.status ?? "";
     role("message").textContent = notice || view?.message?.text || statusMessage(journey);
     // Notices and warnings must be seen even when the widget is collapsed.
     role("message").dataset.notice = String(Boolean(notice || view?.message?.tone === "warn" || view?.status === "Storage unavailable" || view?.recordingElsewhere));
@@ -467,11 +487,7 @@
       // included: a failed command can still change what the worker holds
       // (a failed Save has no bar; a refused command means another Journey is
       // shown), and the error must never sit next to the earlier state.
-      if (result?.view) {
-        view = result.view;
-        elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
-        elapsedAt = performance.now();
-      }
+      if (result?.view) adopt(result.view);
       if (!result?.ok) throw new Error(result?.error || "Reload the extension and reopen Clicksheet.");
       if (view.notice) showResult(view.notice);
       return view;
@@ -479,8 +495,29 @@
     requestTail = pending.catch(() => {});
     return pending;
   }
+  // The one place the widget's view is replaced (I2).
+  const EDITS_DROPPED = "The Journey you were editing is no longer shown here, so the name or description you typed was not saved.";
+  function adopt(next) {
+    view = next;
+    elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
+    elapsedAt = performance.now();
+    if (!edits) return;
+    const shown = view.currentJourney?.id ?? null;
+    // No Journey while storage is unavailable says nothing about the edits
+    // (I4); any other mismatch means their Journey is gone from this tab.
+    if (shown === edits.journeyId || (shown === null && !view.available)) return;
+    dropEdits();
+  }
+  function dropEdits() {
+    edits = null;
+    saveFailed = false;
+    if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
+    role("name").value = view?.currentJourney?.name ?? "";
+    role("description").value = view?.currentJourney?.description ?? "";
+    showFailure(EDITS_DROPPED);
+  }
   // One flush at a time: a call made while another is in flight waits for it
-  // and then runs its own pass, so fields, revision and status are only ever
+  // and then runs its own pass, so values, revision and status are only ever
   // judged in order. Errors still reach each caller.
   function flushEdits() {
     if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
@@ -489,25 +526,38 @@
     return pending;
   }
   async function flushOnce() {
-    if (savedRevision === editRevision) return;
-    const revision = editRevision;
-    const fields = [...editedFields];
-    editedFields.clear();
+    const batch = edits;
+    if (!batch) return;
+    const { revision, journeyId } = batch;
+    const values = batch.values;
+    batch.values = {};
+    // Every request names the Journey the text was typed in (I1), and nothing
+    // is sent once the edits have been dropped (I2).
+    const send = async (command) => {
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+      await request({ ...command, journeyId });
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+    };
     try {
-      // With no fields to send, refresh the view so a stale status is not judged.
-      if (!fields.length) await request({ action: "snapshot" });
-      if (fields.includes("name")) await request({ action: "rename", name: role("name").value });
-      if (fields.includes("description")) await request({ action: "describe", description: role("description").value });
-      // Held fields are kept and sent again on the next flush, which also
+      // With nothing to send, refresh the view so a stale status is not judged.
+      if (!Object.keys(values).length) await send({ action: "snapshot" });
+      if ("name" in values) await send({ action: "rename", name: values.name });
+      if ("description" in values) await send({ action: "describe", description: values.description });
+      // Held values are kept and sent again on the next flush, which also
       // brings a fresh view once storage is reconnected.
       if (view.status !== "Saved locally" || view.hasUnsavedChanges) throw new Error("The change is held here. Reconnect the folder on the Storage page, then return to save it.");
     } catch (error) {
-      for (const field of fields) editedFields.add(field);
+      // Dropped edits are not a failed save: there is nothing left to keep.
+      // The caller still stops, because what it was about to do was decided
+      // while the dropped Journey was shown.
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+      // Text typed during the flush is newer than what was sent.
+      batch.values = { ...values, ...batch.values };
       saveFailed = true;
       throw error;
     }
     saveFailed = false;
-    savedRevision = Math.max(savedRevision, revision);
+    if (batch.revision === revision) edits = null;
   }
   // Every user command goes through this one gate and runs in click order.
   // What a command acts on is fixed at the click: it carries the Journey then
@@ -531,8 +581,8 @@
   let lastFailure = null;
   let supersededExport = null;
   function showResult(text) {
-    const unseen = running && lastFailure && lastFailure.count > running.clickedAt ? `${lastFailure.text} ` : "";
-    notice = `${unseen}${text}`;
+    const unseen = running && lastFailure && lastFailure.count > running.clickedAt ? lastFailure.text : "";
+    notice = [unseen, text].filter(Boolean).join(" ");
     resultCount++;
   }
   function showFailure(text) {
@@ -590,6 +640,13 @@
         requestAnimationFrame(() => { strip.scrollLeft = strip.scrollWidth; });
       }
     } catch (error) { failure = error; }
+    // The worker drops the earlier bar when it is asked to Save. A Save that
+    // failed before it got there (its edits could not be flushed) drops it
+    // here, so the bar does not come back when a navigation re-creates the
+    // widget. One rule: a bar never outlasts the next Save, however it ends.
+    if (failure && supersededExport !== null && view?.lastExport?.downloadId === supersededExport) {
+      await request({ action: "dismiss-export", downloadId: supersededExport, journeyId: undefined }).catch(() => {});
+    }
     try {
       await report(entry, result, failure);
     } finally {
@@ -1217,13 +1274,23 @@
     role("description-count").textContent = left <= 40 ? `${left} left` : "";
   }
   function scheduleEdit(field) {
-    editedFields.add(field);
-    editRevision += 1;
+    const journeyId = view?.currentJourney?.id;
+    if (!journeyId) return;
+    // By I2, pending edits are always for the Journey shown, so this only
+    // ever starts a batch for the Journey being typed in or adds to it.
+    if (edits?.journeyId !== journeyId) edits = { journeyId, values: {}, revision: 0 };
+    edits.values[field] = role(field).value;
+    edits.revision += 1;
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : "Saving";
     clearTimeout(editTimer);
     editTimer = setTimeout(async () => {
       try { await flushEdits(); render(); }
-      catch (error) { role("save-status").textContent = "Storage unavailable"; role("message").textContent = error.message; }
+      catch (error) {
+        // A failed save shows its reason until the next render. Dropped
+        // edits are not a failed save, and their notice is already set.
+        render();
+        if (saveFailed) role("message").textContent = error.message;
+      }
     }, 400);
   }
   role("name").addEventListener("input", () => scheduleEdit("name"));
@@ -1263,7 +1330,7 @@
   action("storage").addEventListener("click", () => { void flushEdits().catch(() => {}); void chrome.runtime.sendMessage({ type: "clicksheet:open-storage" }); });
   action("dismiss").addEventListener("click", () => { root.hidden = true; void flushEdits().catch(() => {}); });
   window.addEventListener("beforeunload", (event) => {
-    if (savedRevision !== editRevision || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
+    if (edits || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
   });
   window.addEventListener("focus", () => { if (!root.hidden && !busy) void run({ action: "snapshot" }); });
   // A hidden tab keeps ticking locally; refresh the real elapsed time on return.

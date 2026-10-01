@@ -27,6 +27,8 @@ const REENTRY_REASONS = new Set(["permission", "navigation"]);
 // Commands that do not act on the shown Journey: a stale widget command of
 // this kind still runs, on the tab's current Journey (dismiss-export checks
 // its own download id).
+// Commands that write text to the Journey they name; see execute().
+const ADDRESSED = new Set(["rename", "describe"]);
 const SHOWN_EXEMPT = new Set(["snapshot", "export-settings", "dismiss-export"]);
 const ENDS_UNDO = new Set(["delete-frame", "move-frame", "redact", "record", "resume", "capture", "stop", "new", "open", "settings"]);
 const CAPTURE_AREAS = new Set(["viewport", "fullPage"]);
@@ -423,6 +425,19 @@ export function createJourneyCoordinator({
       state.released = null;
       await persist();
     }
+    // A Save replaces the bar from any earlier one as soon as it is asked for,
+    // before anything can refuse it or fail, so a failed save never sits next
+    // to an older success (FR-C4.4) and the bar cannot return later.
+    if (command.action === "export" && command.destination === "save" && state.exports[tabId]) {
+      delete state.exports[tabId];
+      await persist();
+    }
+    // A name or description is only ever written to a Journey that the
+    // command names. A missing id is refused: it is never read as "the
+    // current Journey", which may not be the one the text was typed for.
+    if (ADDRESSED.has(command.action) && (typeof command.journeyId !== "string" || !command.journeyId)) {
+      throw new Error("This change did not say which Journey it was for, so nothing was changed. Reopen the Journey and try again.");
+    }
     // An explicit id that no longer exists (folder removed by hand) must not
     // silently redirect a capture or edit into another Journey.
     if (command.journeyId && !find(view, command.journeyId) && !["snapshot", "open", "new"].includes(command.action)) {
@@ -433,6 +448,14 @@ export function createJourneyCoordinator({
     // waited, it is refused rather than switching the tab back. (A shown
     // Journey that was since removed is handled above, or by open and new.)
     const shownId = find(view, state.selections[tabId]) ? state.selections[tabId] : view.journeys[0]?.id ?? null;
+    // ...and it must be the Journey this tab has selected, whoever sent it.
+    // Only a tab with no selection left (a worker that lost its session
+    // state) takes the named Journey as its own, as a held edit retried by id
+    // relies on; it never falls back to the first Journey for these.
+    const selectedId = find(view, state.selections[tabId]) ? state.selections[tabId] : null;
+    if (ADDRESSED.has(command.action) && selectedId !== null && command.journeyId !== selectedId) {
+      throw new Error("Another Journey is shown in this tab now, so the change was not made. Reopen the Journey and try again.");
+    }
     const sawExisting = command.journeyId == null || Boolean(find(view, command.journeyId));
     if (command.asShown && sawExisting && (command.journeyId ?? null) !== shownId) {
       if (!SHOWN_EXEMPT.has(command.action)) throw new Error("Another Journey was opened before this could run, so nothing was done. Try again.");
@@ -446,8 +469,6 @@ export function createJourneyCoordinator({
       state.selections[tabId] = id;
       await persist();
     }
-    if (command.action === "rename" && command.journeyId !== id) throw new Error("Journey not found. Reopen it before renaming.");
-    if (command.action === "describe" && command.journeyId !== id) throw new Error("Journey not found. Reopen it before changing its description.");
     let current = find(view, id);
     if (current && ["snapshot", "open", "new"].includes(command.action)) {
       await reconcile(view, current);
@@ -627,12 +648,6 @@ export function createJourneyCoordinator({
         if (command.destination === "context") {
           const copied = copyLayouts.get(current.id);
           return { ...present(tabId), context: contextFor(copied?.key === copyKey ? copied.layoutOptions : undefined) };
-        }
-        // A new save replaces the bar from any earlier one before anything can
-        // fail, so a failed save never sits next to an older success (FR-C4.4).
-        if (command.destination === "save" && state.exports[tabId]) {
-          delete state.exports[tabId];
-          await persist();
         }
         const load = async (frame) => decodeImage(await storage.readScreenshot(current.id, frame.screenshotFile));
         // Full-width screenshots can exceed what Chrome will allocate, or what

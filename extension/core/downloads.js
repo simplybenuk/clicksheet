@@ -61,8 +61,9 @@ export function createDownloadsExporter({
 
   // True when the file is no longer on disk. removeFile also rejects when
   // the file is already gone, which counts as removed: an error must never
-  // name a file that is not there. Chrome's `exists` is refreshed by the
-  // failed removal; if it cannot be read, the file is assumed to remain.
+  // name a file that is not there. Chrome's `exists` can be out of date, so
+  // only an explicit `false` counts as gone; anything else, including a
+  // lookup that fails, is treated as still there (the safe direction).
   async function discard(id) {
     try {
       await api.removeFile(id);
