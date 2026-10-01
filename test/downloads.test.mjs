@@ -4,7 +4,8 @@ import { createDownloadsExporter } from "../extension/core/downloads.js";
 
 // A stand-in for chrome.downloads with Chrome's uniquify naming. Files that
 // exist on disk from earlier are listed in `existing`.
-function fakeChromeDownloads({ existing = [], stall = () => false, removable = () => true, rename = (name) => name } = {}) {
+// `gone(item)` marks a new file as deleted outside Chrome before clean-up.
+function fakeChromeDownloads({ existing = [], stall = () => false, removable = () => true, gone = () => false, rename = (name) => name } = {}) {
   const files = new Set(existing);
   const items = new Map();
   const listeners = new Set();
@@ -38,6 +39,12 @@ function fakeChromeDownloads({ existing = [], stall = () => false, removable = (
     async cancel(id) { api.cancelled.push(id); },
     async removeFile(id) {
       const item = items.get(id);
+      if (gone(item)) {
+        // Chrome rejects for a file that is already gone, and notes it.
+        files.delete(item.filename.replace("/home/me/Downloads/", ""));
+        item.exists = false;
+        throw new Error("Download file already deleted");
+      }
       if (!removable(item)) throw new Error("Download file not found");
       files.delete(item.filename.replace("/home/me/Downloads/", ""));
     },
@@ -90,6 +97,27 @@ for (const [label, removable, expected, gone] of [
     for (const file of api.files) if (!file.endsWith("1200.json")) assert.ok(error.message.includes(file.replace("Clicksheet/", "")), `${file} remains and is named`);
   });
 }
+
+test("a mismatched file that is already gone counts as removed, so no error names it", async () => {
+  // Both new files of the first attempt were deleted outside Chrome: the
+  // clean-up has nothing to remove, and the pair is saved under the next name.
+  const api = fakeChromeDownloads({ existing: ["Clicksheet/flow-2026-09-30-1200.json"], gone: (item) => item.id <= 2 });
+  const saved = await createDownloadsExporter({ api, toDataUrl }).save(pair);
+  assert.equal(saved.fileName, "flow-2026-09-30-1200-2.png");
+  assert.equal(saved.contextFileName, "flow-2026-09-30-1200-2.json");
+  assert.deepEqual(api.erased.sort(), [1, 2]);
+
+  // The image is already gone and the context cannot be removed: only the
+  // context is named as left.
+  const partial = fakeChromeDownloads({
+    existing: ["Clicksheet/flow-2026-09-30-1200.json"],
+    gone: (item) => item.filename.endsWith(".png"),
+    removable: () => false
+  });
+  const error = await createDownloadsExporter({ api: partial, toDataUrl }).save(pair).then(() => null, (failure) => failure);
+  assert.match(error.message, /^Only the context file flow-2026-09-30-1200 \(1\)\.json is left in Downloads\/Clicksheet, but/);
+  assert.ok(!error.message.includes("flow-2026-09-30-1200.png"), "the image that is not there is not named");
+});
 
 test("when both mismatched files are removed and no name is free, the error names no file and says nothing was saved", async () => {
   const existing = ["", "-2", "-3", "-4", "-5"].map((suffix) => `Clicksheet/flow-2026-09-30-1200${suffix}.json`);

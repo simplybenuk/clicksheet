@@ -463,10 +463,16 @@
     command = { journeyId: view?.currentJourney?.id, ...command };
     const pending = requestTail.then(async () => {
       const result = await chrome.runtime.sendMessage({ type: "clicksheet:journey", command });
+      // Every response that has a view replaces the widget's, failures
+      // included: a failed command can still change what the worker holds
+      // (a failed Save has no bar; a refused command means another Journey is
+      // shown), and the error must never sit next to the earlier state.
+      if (result?.view) {
+        view = result.view;
+        elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
+        elapsedAt = performance.now();
+      }
       if (!result?.ok) throw new Error(result?.error || "Reload the extension and reopen Clicksheet.");
-      view = result.view;
-      elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
-      elapsedAt = performance.now();
       if (view.notice) showResult(view.notice);
       return view;
     });
@@ -513,14 +519,25 @@
   // show its pending text only if no result arrived after its click
   // (`resultCount`), so a queued command never hides an outcome, such as a
   // failed save, that the user has not had a chance to see.
+  // A failure also outlasts the successes of commands clicked before it
+  // arrived: their message is added after it instead of replacing it
+  // (`lastFailure`), so a Copy queued behind a failed Save shows both.
   // `task.finish(result, failure)` lets a command report its own outcome, as
   // the clipboard copies do.
   const MAX_QUEUED = 8;
   const commandQueue = [];
   let resultCount = 0;
+  let running = null;
+  let lastFailure = null;
+  let supersededExport = null;
   function showResult(text) {
-    notice = text;
+    const unseen = running && lastFailure && lastFailure.count > running.clickedAt ? `${lastFailure.text} ` : "";
+    notice = `${unseen}${text}`;
     resultCount++;
+  }
+  function showFailure(text) {
+    notice = text;
+    lastFailure = { text, count: ++resultCount };
   }
   function run(command, task = {}) {
     if (command.action !== "snapshot" && view && !("journeyId" in command)) {
@@ -535,14 +552,18 @@
   async function report({ finish = null }, result, failure) {
     try {
       if (finish) await finish(result, failure);
-      else if (failure) showResult(failure.message);
+      else if (failure) showFailure(failure.message);
     } catch (error) {
-      showResult(error?.message || String(error));
+      showFailure(error?.message || String(error));
     }
   }
   async function execute(entry) {
     const { command, pending = "", clickedAt } = entry;
     busy = true;
+    running = entry;
+    // A Save replaces the bar of the save before it, whatever happens next:
+    // that bar goes when the Save starts and is not shown again.
+    if (command.action === "export" && command.destination === "save") supersededExport = view?.lastExport?.downloadId ?? null;
     if (command.action !== "snapshot" && resultCount === clickedAt) notice = pending;
     let failure = null;
     let result;
@@ -573,6 +594,7 @@
       await report(entry, result, failure);
     } finally {
       busy = false;
+      running = null;
       render();
       const next = commandQueue.shift();
       if (next) void execute(next);
@@ -907,8 +929,11 @@
   }
   // The bar is an extension page (see pages/export-bar.js); it is reloaded
   // for each new download so it never shows an older file.
+  // A bar that a later Save has replaced (`supersededExport`) stays hidden
+  // even if the view still names it, as it does until that Save reaches the
+  // worker or if the Save fails before it gets there.
   function renderExportBar() {
-    const saved = view?.lastExport;
+    const saved = view?.lastExport && view.lastExport.downloadId !== supersededExport ? view.lastExport : null;
     role("export-bar").hidden = !saved;
     if (!saved) return;
     const frame = role("export-bar-frame");
@@ -945,8 +970,8 @@
           try { deliver.resolve(toBlob(result)); } catch (error) { deliver.reject(error); failure = error; }
         }
         const [clipboard] = await Promise.allSettled([copied]);
-        if (failure) showResult(failure.message);
-        else if (clipboard.status === "rejected") showResult(failed);
+        if (failure) showFailure(failure.message);
+        else if (clipboard.status === "rejected") showFailure(failed);
         else showResult(done);
       }
     });
@@ -1275,7 +1300,7 @@
     }
     if (message?.type === "clicksheet:notice") {
       // A failed shortcut capture must be visible even if the toolbar was hidden.
-      showResult(String(message.text ?? ""));
+      showFailure(String(message.text ?? ""));
       root.hidden = false;
       render();
     }

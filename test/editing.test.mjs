@@ -164,6 +164,29 @@ test("a save that fails after an earlier success leaves no bar from the earlier 
   assert.equal((await coordinator.request(1, { action: "snapshot" })).lastExport, null);
 });
 
+test("a failed command's error carries the tab's view as it is after the failure", async () => {
+  const { coordinator, id, options } = await withFrames(1);
+  const first = await coordinator.request(1, { action: "export", journeyId: id, destination: "save" });
+  assert.ok(first.lastExport);
+  // What the widget gets with the error, with no follow-up request: no bar.
+  options.downloads.fail = "Chrome could not save flow.png.";
+  const failed = await coordinator.request(1, { action: "export", journeyId: id, asShown: true, destination: "save" }).then(() => null, (error) => error);
+  assert.match(failed.message, /could not save/);
+  assert.equal(failed.view.lastExport, null, "the failed save's view has no bar from the earlier save");
+  assert.equal(failed.view.currentJourney.id, id);
+  // A refused command's view shows the Journey the tab is on now.
+  const other = (await coordinator.request(1, { action: "new", journeyId: id, asShown: true })).currentJourney.id;
+  const refused = await coordinator.request(1, { action: "capture", journeyId: id, asShown: true }).then(() => null, (error) => error);
+  assert.match(refused.message, /Another Journey was opened/);
+  assert.equal(refused.view.currentJourney.id, other);
+  // A notice waiting for the tab is not used up by a failure's view.
+  options.downloads.fail = null;
+  await coordinator.request(1, { action: "open", journeyId: other, asShown: true, id });
+  const unknown = await coordinator.request(1, { action: "no-such-action", journeyId: id }).then(() => null, (error) => error);
+  assert.equal(unknown.view.notice, "");
+  assert.equal(unknown.view.currentJourney.id, id);
+});
+
 test("a Clicksheet folder save that fails also removes an earlier Downloads bar", async () => {
   let failRender = false;
   const env = setup({ renderSheet: async () => {

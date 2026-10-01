@@ -59,11 +59,16 @@ export function createDownloadsExporter({
     return `Nothing was saved in ${place}`;
   }
 
+  // True when the file is no longer on disk. removeFile also rejects when
+  // the file is already gone, which counts as removed: an error must never
+  // name a file that is not there. Chrome's `exists` is refreshed by the
+  // failed removal; if it cannot be read, the file is assumed to remain.
   async function discard(id) {
     try {
       await api.removeFile(id);
     } catch {
-      return false;
+      const [item] = await api.search({ id }).catch(() => []);
+      if (!item || item.exists !== false) return false;
     }
     await api.erase({ id }).catch(() => {});
     return true;

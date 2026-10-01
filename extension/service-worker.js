@@ -142,7 +142,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === "clicksheet:journey" && Number.isInteger(tabId)) {
     journeys.request(tabId, message.command ?? {}, { url: sender.tab.url, windowId: sender.tab.windowId }).then(
       (view) => respond({ ok: true, view }),
-      (error) => respond({ ok: false, error: userMessage(error) })
+      // A failure carries the tab's current view, so the widget never shows
+      // an error next to state from before the failed command.
+      (error) => respond({ ok: false, error: userMessage(error), view: error?.view ?? null })
     );
     return true;
   }

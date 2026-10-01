@@ -15,8 +15,9 @@ export async function run(t) {
   const order = async () => (await s.readJourney()).frames.map((f) => f.id);
   // Holds the next worker request named `match` (for example "export:save")
   // until release(), so a test can make the widget busy without depending on
-  // timing, and logs the commands the worker receives. Callers release in a
-  // finally block so a failed step cannot leave the worker held.
+  // timing, and logs the commands the worker receives. Callers release and
+  // restore() in finally blocks, so a failed step cannot leave the worker
+  // held or the wrapper installed.
   async function holdNext(match) {
     await worker.evaluate((match) => {
       const journeys = globalThis.__journeys;
@@ -147,6 +148,18 @@ export async function run(t) {
     downloadedContext.journey.description === DESCRIPTION && downloadedContext.sheet.width === expected.width &&
     downloadedContext.sheet.height === expected.height && image?.fileSize > 0,
     JSON.stringify({ sheet: downloadedContext?.sheet, expected: [expected.width, expected.height], steps: downloadedContext?.steps.length }));
+  // The size in the PNG header of the image Chrome was given, against the
+  // `sheet` its context states. (Chrome's record keeps only the start of a
+  // long data URL, which is enough for the header but not to decode it.)
+  const imageSize = await worker.evaluate(async (id) => {
+    const [item] = await chrome.downloads.search({ id });
+    const head = atob(item.url.slice(item.url.indexOf(",") + 1, item.url.indexOf(",") + 1 + 32));
+    const number = (at) => [0, 1, 2, 3].reduce((value, n) => value * 256 + head.charCodeAt(at + n), 0);
+    return { png: head.slice(1, 4) === "PNG" && head.slice(12, 16) === "IHDR", width: number(16), height: number(20), urlLength: item.url.length };
+  }, image?.id).catch((error) => ({ error: error.message }));
+  check("the downloaded image has the pixel size its context states",
+    imageSize.png && imageSize.width === downloadedContext?.sheet.width && imageSize.height === downloadedContext?.sheet.height,
+    `${JSON.stringify(imageSize)} against ${JSON.stringify(downloadedContext?.sheet)}`);
   check("the redacted step is marked as redacted in the context", downloadedContext?.steps[3]?.redacted === true && downloadedContext?.steps[0]?.redacted === false);
 
   const bar = toolbar.locator('[data-role="export-bar"]');
@@ -174,27 +187,105 @@ export async function run(t) {
   const saving = await holdNext("export:save");
   let busyAtDismiss = false;
   let heldSave = false;
+  let newName;
+  let saveThenDismiss = [];
   try {
-    await action("export").click();
-    await action("save-export").click();
-    heldSave = await saving.held();
-    busyAtDismiss = await action("export").isDisabled();
-    await action("dismiss-export").click();
+    try {
+      await action("export").click();
+      await action("save-export").click();
+      heldSave = await saving.held();
+      busyAtDismiss = await action("export").isDisabled();
+      // The old bar is hidden once the Save starts, so its ✕ is clicked the
+      // way a click that was already on its way would land.
+      await action("dismiss-export").dispatchEvent("click");
+    } finally {
+      await saving.release();
+    }
+    newName = await until(async () => (await s.message()).match(/^Saved (\S+) and \S+ in Downloads\/Clicksheet/)?.[1], (name) => name && name !== savedName, 15000);
+    saveThenDismiss = await until(saving.log, (log) => log.includes("dismiss-export"));
+    await idle();
   } finally {
-    await saving.release();
+    await saving.restore();
   }
-  const newName = await until(async () => (await s.message()).match(/^Saved (\S+) and \S+ in Downloads\/Clicksheet/)?.[1], (name) => name && name !== savedName, 15000);
-  const saveThenDismiss = await until(saving.log, (log) => log.includes("dismiss-export"));
-  await idle();
-  await saving.restore();
   check("a ✕ clicked during a Save is queued behind it",
     heldSave && busyAtDismiss && saveThenDismiss.filter((name) => name !== "snapshot").join() === "export:save,dismiss-export",
     `held: ${heldSave}; busy: ${busyAtDismiss}; ${saveThenDismiss.join()}`);
   check("the queued ✕ for the old bar leaves the new save's bar",
     await bar.isVisible() && await until(barText, (text) => text === newName) === newName, `${newName}: ${await barText().catch((error) => error.message)}`);
   check("the Save result is still shown after the queued ✕ ran", (await s.message()).startsWith(`Saved ${newName} and`), await s.message());
-  // Straight after a click in the bar, as a person would: the window regains
-  // focus and refreshes as this click lands, and the click must still count.
+  // A Save that fails after one that worked (AC-C8): Chrome refuses the
+  // download. The earlier bar goes when the Save starts, and the error is
+  // then shown with no bar, with no other command to refresh the widget.
+  await idle();
+  await worker.evaluate(() => {
+    globalThis.__realDownload ??= chrome.downloads.download;
+    chrome.downloads.download = () => Promise.reject(new Error("The disk is full."));
+  });
+  let heldFailing = false;
+  let barWhileSaving = true;
+  let afterFailure = "";
+  let barAfterFailure = true;
+  let afterQueuedCopy = "";
+  try {
+    const failing = await holdNext("export:save");
+    try {
+      try {
+        await action("export").click();
+        await action("save-export").click();
+        heldFailing = await failing.held();
+        barWhileSaving = await bar.isVisible();
+      } finally {
+        await failing.release();
+      }
+      await s.messageMatches(/could not save/);
+      await idle();
+      afterFailure = await s.message();
+      barAfterFailure = await bar.isVisible();
+    } finally {
+      await failing.restore();
+    }
+    await s.screenshot("failed-save.png");
+    // A Copy context clicked during another failing Save runs after it, and
+    // its success must leave the error readable.
+    await page.evaluate(() => navigator.clipboard.writeText(""));
+    const failingAgain = await holdNext("export:save");
+    try {
+      try {
+        await action("export").click();
+        await action("save-export").click();
+        await failingAgain.held();
+        await action("copy-context").dispatchEvent("click");
+      } finally {
+        await failingAgain.release();
+      }
+      await s.messageMatches(/Copied the step context|could not be copied/);
+      await idle();
+      afterQueuedCopy = await s.message();
+    } finally {
+      await failingAgain.restore();
+    }
+  } finally {
+    await worker.evaluate(() => { chrome.downloads.download = globalThis.__realDownload; });
+  }
+  check("the earlier bar is hidden as soon as a new Save starts", heldFailing && !barWhileSaving, `held: ${heldFailing}; bar visible: ${barWhileSaving}`);
+  const workerExport = await worker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return globalThis.__journeys.lastExport(tab.id);
+  });
+  check("a Save that fails after one that worked shows the error and no bar",
+    /^Chrome could not save \S+\.png\. The disk is full\.$/.test(afterFailure) && !barAfterFailure && workerExport === null,
+    `bar visible: ${barAfterFailure}; worker: ${JSON.stringify(workerExport)}; ${afterFailure}`);
+  const copiedAfterFailure = await page.evaluate(() => navigator.clipboard.readText()).then(JSON.parse, () => null);
+  check("a Copy context queued behind a failed Save copies and leaves the error readable",
+    copiedAfterFailure?.format === "clicksheet-context" && /^Chrome could not save \S+\.png\. The disk is full\. Copied the step context/.test(afterQueuedCopy), afterQueuedCopy);
+  // The next Save works again and shows its own bar.
+  await action("export").click();
+  await action("save-export").click();
+  const recoveredName = await until(async () => (await s.message()).match(/^Saved (\S+) and \S+ in Downloads\/Clicksheet/)?.[1], (name) => name && name !== newName, 15000);
+  check("a Save after the failed one shows its own bar",
+    await until(() => bar.isVisible()) && await until(barText, (text) => text === recoveredName) === recoveredName, `${recoveredName}: ${await barText().catch((error) => error.message)}`);
+  await idle();
+  // Straight after a Save, the ✕ closes the bar that is shown.
   await action("dismiss-export").click();
   check("the bar closes", await until(async () => !(await bar.isVisible())), `still visible: ${await s.message()}`);
 
@@ -248,20 +339,24 @@ export async function run(t) {
   const refresh = await holdNext("snapshot");
   let heldRefresh = false;
   let busyAtClick = false;
+  let queuedOrder = [];
   try {
-    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    heldRefresh = await refresh.held();
-    busyAtClick = await action("export").isDisabled();
-    await action("copy-context").click();
-    await action("dismiss-export").dispatchEvent("click");
+    try {
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      heldRefresh = await refresh.held();
+      busyAtClick = await action("export").isDisabled();
+      await action("copy-context").click();
+      await action("dismiss-export").dispatchEvent("click");
+    } finally {
+      await refresh.release();
+    }
+    await s.messageMatches(/Copied the step context|could not be copied/);
+    queuedOrder = await until(refresh.log, (log) => log.includes("dismiss-export"));
+    await idle();
   } finally {
-    await refresh.release();
+    await refresh.restore();
   }
   check("the widget is busy with a refresh when Copy context is clicked", heldRefresh && busyAtClick, `held: ${heldRefresh}; busy: ${busyAtClick}`);
-  await s.messageMatches(/Copied the step context|could not be copied/);
-  const queuedOrder = await until(refresh.log, (log) => log.includes("dismiss-export"));
-  await idle();
-  await refresh.restore();
   const queuedCopy = await page.evaluate(() => navigator.clipboard.readText()).then(JSON.parse, () => null);
   check("Copy context clicked during a refresh still copies", queuedCopy?.format === "clicksheet-context", await s.message());
   check("queued commands run in click order after the refresh",

@@ -736,13 +736,15 @@ export function createJourneyCoordinator({
     return prepared;
   }
 
-  function present(tabId) {
+  // `keepNotice` leaves a waiting notice for the next successful response:
+  // the view sent with a failure is shown next to the error, not a notice.
+  function present(tabId, { keepNotice = false } = {}) {
     const view = session.snapshot();
     const state = memory;
     const selected = find(view, state.selections[tabId]);
     const captureReady = Boolean(browser) && (!state.recording || state.recording.tabId === tabId);
-    const notice = notices.get(tabId) ?? "";
-    notices.delete(tabId);
+    const notice = keepNotice ? "" : notices.get(tabId) ?? "";
+    if (!keepNotice) notices.delete(tabId);
     return {
       ...view,
       currentJourney: selected ? widgetJourney(selected) : null,
@@ -870,8 +872,22 @@ export function createJourneyCoordinator({
   }
 
   return {
+    // A failed command rejects with the error, and the error carries the
+    // tab's view as it is after the failure (`error.view`). A command can
+    // change state before it fails (a Save clears the earlier bar; a refused
+    // command means the tab shows another Journey), so whoever shows the
+    // error must show that state with it, not the one from before the command.
     request(tabId, command, context = {}) {
-      return enqueue(() => execute(tabId, command ?? {}, context));
+      return enqueue(async () => {
+        try {
+          return await execute(tabId, command ?? {}, context);
+        } catch (error) {
+          if (error && typeof error === "object") {
+            try { error.view = present(tabId, { keepNotice: true }); } catch { /* no state to show yet */ }
+          }
+          throw error;
+        }
+      });
     },
     event(tabId, event) {
       // Navigation state is recorded at once: a capture already queued or in
