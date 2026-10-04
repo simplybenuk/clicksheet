@@ -9,15 +9,17 @@ const FONT_FAMILY = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 const PLATFORM_LIMIT_MESSAGE =
   "The browser could not create an export image this large. Delete some screenshots, then export again.";
 
+// `loadBrandIcon` resolves to the Clicksheet icon bitmap. Without it, or if it
+// fails, the brand mark is drawn as text only and the export still succeeds.
 export async function renderContactSheet(
   journey,
-  { loadImage, createCanvas = (width, height) => new OffscreenCanvas(width, height), layoutOptions } = {}
+  { loadImage, loadBrandIcon = null, createCanvas = (width, height) => new OffscreenCanvas(width, height), layoutOptions } = {}
 ) {
   if (typeof loadImage !== "function") {
     throw new TypeError("renderContactSheet needs a loadImage(frame) function.");
   }
 
-  const layout = layoutContactSheet(journey?.frames, layoutOptions);
+  const layout = layoutContactSheet(journey?.frames, { ...layoutOptions, header: headerText(journey) });
   let canvas;
   let ctx;
 
@@ -38,6 +40,8 @@ export async function renderContactSheet(
   ctx.fillRect(0, 0, layout.width, layout.height);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
+
+  await drawHeader(ctx, layout.header, loadBrandIcon);
 
   // Sequential loading keeps at most one decoded screenshot in memory.
   for (const cell of layout.cells) {
@@ -68,6 +72,73 @@ export async function renderContactSheet(
   }
 
   return blob;
+}
+
+export function headerText(journey) {
+  return { title: String(journey?.name ?? ""), description: String(journey?.description ?? "") };
+}
+
+const baselineIn = (top, lineHeight) => top + Math.round(lineHeight * 0.72);
+
+// Header lines were wrapped by the layout; fillText's maxWidth condenses a
+// line with unusually wide glyphs rather than cutting any of it off.
+async function drawHeader(ctx, header, loadBrandIcon) {
+  if (!header) return;
+  const { title, description, brand } = header;
+
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `700 ${title.fontSize}px ${FONT_FAMILY}`;
+  title.lines.forEach((line, row) => {
+    ctx.fillText(line, title.x, baselineIn(title.y + row * title.lineHeight, title.lineHeight), title.width);
+  });
+
+  if (description) {
+    ctx.fillStyle = COLORS.muted;
+    ctx.font = `400 ${description.fontSize}px ${FONT_FAMILY}`;
+    description.lines.forEach((line, row) => {
+      ctx.fillText(line, description.x, baselineIn(description.y + row * description.lineHeight, description.lineHeight), description.width);
+    });
+  }
+
+  await drawBrand(ctx, brand, loadBrandIcon);
+}
+
+// Right-aligned to the grid: the text is measured, and the icon sits just
+// left of it.
+async function drawBrand(ctx, brand, loadBrandIcon) {
+  const { name, line, iconSize, iconGap } = brand;
+  const right = brand.x + brand.width;
+  ctx.font = `700 ${name.fontSize}px ${FONT_FAMILY}`;
+  const nameWidth = measure(ctx, name.text);
+  ctx.font = `400 ${line.fontSize}px ${FONT_FAMILY}`;
+  const lineWidth = Math.max(...line.lines.map((text) => measure(ctx, text)));
+  const textWidth = Math.min(Math.max(nameWidth, lineWidth), brand.width - iconSize - iconGap);
+  const textX = right - textWidth;
+
+  ctx.fillStyle = COLORS.text;
+  ctx.font = `700 ${name.fontSize}px ${FONT_FAMILY}`;
+  ctx.fillText(name.text, textX, baselineIn(brand.y, name.lineHeight), textWidth);
+  ctx.fillStyle = COLORS.muted;
+  ctx.font = `400 ${line.fontSize}px ${FONT_FAMILY}`;
+  line.lines.forEach((text, row) => {
+    ctx.fillText(text, textX, baselineIn(brand.y + name.lineHeight + row * line.lineHeight, line.lineHeight), textWidth);
+  });
+
+  let icon = null;
+  try {
+    icon = await loadBrandIcon?.();
+  } catch (error) {
+    console.warn("Clicksheet exported without its icon because the icon could not be loaded.", error?.message);
+  }
+  if (!icon) return;
+  // An icon that loads but cannot be drawn is treated like a failed load.
+  try {
+    ctx.drawImage(icon, textX - iconGap - iconSize, brand.y, iconSize, iconSize);
+  } catch (error) {
+    console.warn("Clicksheet exported without its icon because the icon could not be drawn.", error?.message);
+  } finally {
+    icon.close?.();
+  }
 }
 
 function drawCard(ctx, cell) {

@@ -74,3 +74,14 @@ test("previews are read only from a frame in the selected Journey", async () => 
   assert.equal(preview.thumbnail, "preview:PNG fixture");
   await assert.rejects(coordinator.request(1, { action: "thumbnail", journeyId: journey.id, frameId: "missing" }), /not found/);
 });
+
+test("describe saves the description of the addressed Journey only", async () => {
+  const { coordinator, volume } = setup();
+  const created = await coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  const described = await coordinator.request(1, { action: "describe", journeyId: id, description: "Sign up, then invite a teammate." });
+  assert.equal(described.currentJourney.description, "Sign up, then invite a teammate.");
+  assert.equal((await createStorage(volume.root).loadJourney(id)).description, "Sign up, then invite a teammate.");
+  await assert.rejects(coordinator.request(1, { action: "describe", journeyId: "missing", description: "x" }), /not found/);
+  await assert.rejects(coordinator.request(1, { action: "describe", journeyId: id, description: 5 }), /cannot be changed/);
+});

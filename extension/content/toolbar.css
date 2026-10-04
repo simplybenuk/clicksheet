@@ -51,7 +51,12 @@
 }
 #clicksheet-toolbar-root .cs-panel > * { min-width: 0; }
 #clicksheet-toolbar-root .clicksheet-toolbar__heading { display: flex; align-items: center; gap: 8px; }
-#clicksheet-toolbar-root input { flex: 1 1 160px; min-width: 0; background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px 8px; font: inherit; }
+#clicksheet-toolbar-root input, #clicksheet-toolbar-root textarea { flex: 1 1 160px; min-width: 0; background: #12151b; border: 1px solid #424b5a; border-radius: 6px; color: white; padding: 6px 8px; font: inherit; }
+#clicksheet-toolbar-root .cs-description { display: grid; gap: 2px; }
+#clicksheet-toolbar-root .cs-description label { font-size: 11px; color: #aeb7c4; }
+#clicksheet-toolbar-root textarea { resize: vertical; min-height: 2.6em; line-height: 1.3; }
+#clicksheet-toolbar-root [data-role="description-count"] { justify-self: end; font-size: 11px; color: #aeb7c4; }
+#clicksheet-toolbar-root [data-role="description-count"]:empty { display: none; }
 #clicksheet-toolbar-root .clicksheet-toolbar__library { position: absolute; top: 52px; right: 12px; z-index: 1; background: #252a35; padding: 12px; border: 1px solid #4e596b; border-radius: 10px; width: min(300px, calc(100% - 24px)); max-height: 300px; overflow-y: auto; box-shadow: 0 8px 24px #0008; }
 #clicksheet-toolbar-root [data-role="journeys"] { display: grid; gap: 6px; margin-top: 8px; }
 #clicksheet-toolbar-root [aria-current="true"] { border-color: #66a3ff; }

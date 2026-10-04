@@ -409,7 +409,7 @@ export function createLibrarySession({
     // are always owned by the storage adapter.
     updateJourney(id, change) {
       if (!state.journeys.has(id)) throw new Error("Journey not found.");
-      const allowed = new Set(["name", "frames", "settings", "state", "pauseReason", "recordingSegment"]);
+      const allowed = new Set(["name", "description", "frames", "settings", "state", "pauseReason", "recordingSegment"]);
       if (Object.keys(change).some((key) => !allowed.has(key))) {
         throw new TypeError("This Journey field cannot be edited.");
       }
@@ -419,6 +419,12 @@ export function createLibrarySession({
     rename(id, name) {
       if (state.journeys.has(id)) {
         edit(id, { name });
+      }
+    },
+
+    describe(id, description) {
+      if (state.journeys.has(id)) {
+        edit(id, { description });
       }
     }
   };

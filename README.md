@@ -155,7 +155,7 @@ Clicksheet is not yet on the Chrome Web Store. Until it is, load it from source:
 3. Run `npm run fixture` and open the printed URL, or open any `http(s)` page.
 4. Click the Clicksheet icon. A floating widget appears in the bottom-right corner; drag it by its grip to move it, use the arrow button to expand or collapse it, and press Alt+Shift+K to hide or show it. In the expanded panel, choose **Storage** and pick a local folder for your Journeys.
 5. Create a Journey, press **Record**, and use the page. Clicks that change the page are captured automatically. **Capture** adds the current state at any time. Press Alt+Shift+S instead to keep a hover or focus state that moving to the toolbar would end.
-6. Press **Stop**, review and tidy the screenshots (double-click a thumbnail or press **View** to see it full size; delete, drag to reorder, **Redact…**), then use **Export** to copy or download the contact sheet.
+6. Press **Stop**, review and tidy the screenshots (double-click a thumbnail or press **View** to see it full size; delete, drag to reorder, **Redact…**), then use **Export** to copy or download the contact sheet. The sheet is headed by the Journey name and, if you added one under the name, its short description.
 
 If a keyboard shortcut does not work, open **Settings** in the widget: it shows which shortcuts Chrome has assigned and links to the page where you can set them.
 

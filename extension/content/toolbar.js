@@ -57,6 +57,11 @@
           <button type="button" data-action="library" aria-expanded="false">Journeys</button>
           <span data-role="save-status" aria-live="polite"></span>
         </div>
+        <div class="cs-description">
+          <label for="cs-description">Description (optional)</label>
+          <textarea id="cs-description" data-role="description" rows="2" maxlength="280" placeholder="What is this journey for?"></textarea>
+          <span data-role="description-count" aria-live="polite"></span>
+        </div>
         <div data-role="library" class="clicksheet-toolbar__library" hidden>
           <button type="button" data-action="new">New Journey</button>
           <div data-role="journeys"></div>
@@ -126,12 +131,15 @@
   let selectedFrame = null;
   let busy = false;
   let refreshQueued = false;
-  let renameTimer = null;
-  let renameRevision = 0;
+  // The name and description share one pending-edit revision and debounce.
+  let editTimer = null;
+  let editRevision = 0;
   let savedRevision = 0;
+  const editedFields = new Set();
   let saveFailed = false;
   let notice = "";
   let requestTail = Promise.resolve();
+  let flushTail = Promise.resolve();
   let stopWatching = null;
   let hiddenForCapture = null;
   // Elements whose inline style Clicksheet changes during a capture (covered
@@ -193,11 +201,14 @@
   function render() {
     const journey = view?.currentJourney;
     const controls = view?.controls ?? {};
-    if (shadow.activeElement !== role("name") && savedRevision === renameRevision) role("name").value = journey?.name ?? "";
+    if (shadow.activeElement !== role("name") && savedRevision === editRevision) role("name").value = journey?.name ?? "";
+    if (shadow.activeElement !== role("description") && savedRevision === editRevision) role("description").value = journey?.description ?? "";
     role("name").disabled = busy || !journey || !view?.renamable;
+    role("description").disabled = role("name").disabled;
+    renderDescriptionCount();
     role("state").textContent = journey?.state ?? "Ready";
     renderElapsed();
-    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < renameRevision ? "Saving" : view?.status ?? "";
+    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < editRevision ? "Saving" : view?.status ?? "";
     role("message").textContent = notice || view?.message?.text || statusMessage(journey);
     // Notices and warnings must be seen even when the widget is collapsed.
     role("message").dataset.notice = String(Boolean(notice || view?.message?.tone === "warn" || view?.status === "Storage unavailable" || view?.recordingElsewhere));
@@ -445,16 +456,35 @@
     requestTail = pending.catch(() => {});
     return pending;
   }
-  async function flushRename() {
-    if (renameTimer !== null) { clearTimeout(renameTimer); renameTimer = null; }
-    if (savedRevision === renameRevision) return;
-    const revision = renameRevision;
-    const name = role("name").value;
-    try { await request({ action: "rename", name }); }
-    catch (error) { saveFailed = true; throw error; }
-    if (view.status !== "Saved locally" || view.hasUnsavedChanges) { saveFailed = true; throw new Error("The rename is held here. Reconnect the folder on the Storage page, then return to save it."); }
+  // One flush at a time: a call made while another is in flight waits for it
+  // and then runs its own pass, so fields, revision and status are only ever
+  // judged in order. Errors still reach each caller.
+  function flushEdits() {
+    if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
+    const pending = flushTail.then(flushOnce);
+    flushTail = pending.catch(() => {});
+    return pending;
+  }
+  async function flushOnce() {
+    if (savedRevision === editRevision) return;
+    const revision = editRevision;
+    const fields = [...editedFields];
+    editedFields.clear();
+    try {
+      // With no fields to send, refresh the view so a stale status is not judged.
+      if (!fields.length) await request({ action: "snapshot" });
+      if (fields.includes("name")) await request({ action: "rename", name: role("name").value });
+      if (fields.includes("description")) await request({ action: "describe", description: role("description").value });
+      // Held fields are kept and sent again on the next flush, which also
+      // brings a fresh view once storage is reconnected.
+      if (view.status !== "Saved locally" || view.hasUnsavedChanges) throw new Error("The change is held here. Reconnect the folder on the Storage page, then return to save it.");
+    } catch (error) {
+      for (const field of fields) editedFields.add(field);
+      saveFailed = true;
+      throw error;
+    }
     saveFailed = false;
-    savedRevision = revision;
+    savedRevision = Math.max(savedRevision, revision);
   }
   async function run(command) {
     if (busy) return;
@@ -463,13 +493,14 @@
     let failure = null;
     render();
     try {
-      await flushRename();
+      await flushEdits();
       await request(command);
       if (command.action === "open" || command.action === "new") {
         selectedFrame = null;
         role("library").hidden = true;
         action("library").setAttribute("aria-expanded", "false");
         role("name").value = view.currentJourney?.name ?? "";
+        role("description").value = view.currentJourney?.description ?? "";
       }
       if (command.action === "delete-frame") notice = "Screenshot deleted. Use Undo delete to restore it.";
       if (command.action === "undo-delete") selectedFrame = command.frameId ?? selectedFrame;
@@ -1029,15 +1060,24 @@
     }
   });
 
-  role("name").addEventListener("input", () => {
-    renameRevision += 1;
+  // The remaining count appears only near the limit.
+  function renderDescriptionCount() {
+    const field = role("description");
+    const left = field.maxLength - field.value.length;
+    role("description-count").textContent = left <= 40 ? `${left} left` : "";
+  }
+  function scheduleEdit(field) {
+    editedFields.add(field);
+    editRevision += 1;
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : "Saving";
-    clearTimeout(renameTimer);
-    renameTimer = setTimeout(async () => {
-      try { await flushRename(); render(); }
+    clearTimeout(editTimer);
+    editTimer = setTimeout(async () => {
+      try { await flushEdits(); render(); }
       catch (error) { role("save-status").textContent = "Storage unavailable"; role("message").textContent = error.message; }
     }, 400);
-  });
+  }
+  role("name").addEventListener("input", () => scheduleEdit("name"));
+  role("description").addEventListener("input", () => { renderDescriptionCount(); scheduleEdit("description"); });
   action("library").addEventListener("click", () => {
     role("library").hidden = !role("library").hidden;
     action("library").setAttribute("aria-expanded", String(!role("library").hidden));
@@ -1067,10 +1107,10 @@
     if (!selectedFrame || !view?.currentJourney) return;
     void chrome.runtime.sendMessage({ type: "clicksheet:open-editor", journeyId: view.currentJourney.id, frameId: selectedFrame });
   });
-  action("storage").addEventListener("click", () => { void flushRename().catch(() => {}); void chrome.runtime.sendMessage({ type: "clicksheet:open-storage" }); });
-  action("dismiss").addEventListener("click", () => { root.hidden = true; void flushRename().catch(() => {}); });
+  action("storage").addEventListener("click", () => { void flushEdits().catch(() => {}); void chrome.runtime.sendMessage({ type: "clicksheet:open-storage" }); });
+  action("dismiss").addEventListener("click", () => { root.hidden = true; void flushEdits().catch(() => {}); });
   window.addEventListener("beforeunload", (event) => {
-    if (savedRevision !== renameRevision || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
+    if (savedRevision !== editRevision || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
   });
   window.addEventListener("focus", () => { if (!root.hidden && !busy) void run({ action: "snapshot" }); });
   // A hidden tab keeps ticking locally; refresh the real elapsed time on return.

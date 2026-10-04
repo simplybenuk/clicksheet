@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { layoutContactSheet } from "../extension/core/export-layout.js";
-import { drawTargetMarker, ExportTooLargeError, renderContactSheet } from "../extension/core/export-renderer.js";
+import { BRAND_LINE, BRAND_NAME } from "../extension/core/export-layout.js";
+import { drawTargetMarker, ExportTooLargeError, headerText, renderContactSheet } from "../extension/core/export-renderer.js";
 
 // Records every canvas call so tests can check what was drawn and in which order.
 function fakeContext() {
@@ -96,7 +97,7 @@ test("every frame is drawn in order, one bitmap at a time, and closed", async ()
 
   assert.equal(blob.type, "image/png");
   const [canvas] = canvases;
-  const layout = layoutContactSheet(journey.frames);
+  const layout = layoutContactSheet(journey.frames, { header: headerText(journey) });
   assert.equal(canvas.width, layout.width);
   assert.equal(canvas.height, layout.height);
 
@@ -180,6 +181,90 @@ test("bitmaps are closed even when drawing fails", async () => {
   };
   await assert.rejects(renderContactSheet({ frames: [frame(1)] }, { loadImage: images.loadImage, createCanvas }), /decode failed/);
   assert.equal(images.loaded[0].closed, true);
+});
+
+const drawnText = (canvas) => canvas.ctx.ops.filter((entry) => entry.op === "fillText").map((entry) => entry.args[0]);
+
+test("the header title, description and brand mark are drawn before the first screenshot", async () => {
+  const journey = { name: "Create a new user", description: "Add a teammate from Settings.", frames: [frame(1), frame(2)] };
+  const { canvases, createCanvas } = fakeCanvas();
+  const icon = { width: 128, height: 128, closed: false, close() { this.closed = true; } };
+  await renderContactSheet(journey, { loadImage: bitmapLoader().loadImage, loadBrandIcon: async () => icon, createCanvas });
+
+  const ops = canvases[0].ctx.ops;
+  const firstFrame = ops.findIndex((entry) => entry.op === "drawImage" && entry.args[0].id === "frame-1");
+  const beforeFrames = ops.slice(0, firstFrame);
+  const text = beforeFrames.filter((entry) => entry.op === "fillText").map((entry) => entry.args[0]);
+  assert.deepEqual(text, ["Create a new user", "Add a teammate from Settings.", BRAND_NAME, BRAND_LINE]);
+  const iconDraw = beforeFrames.find((entry) => entry.op === "drawImage");
+  assert.equal(iconDraw.args[0], icon);
+  assert.equal(icon.closed, true);
+
+  // The icon sits left of the brand text, inside the brand box.
+  const { brand } = layoutContactSheet(journey.frames, { header: headerText(journey) }).header;
+  const brandText = beforeFrames.find((entry) => entry.op === "fillText" && entry.args[0] === BRAND_NAME);
+  assert.ok(iconDraw.args[1] >= brand.x);
+  assert.ok(iconDraw.args[1] + iconDraw.args[3] <= brandText.args[1]);
+});
+
+test("a failed icon load still exports, with the text brand mark", async () => {
+  const journey = { name: "Flow", frames: [frame(1)] };
+  const { canvases, createCanvas } = fakeCanvas();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const blob = await renderContactSheet(journey, {
+      loadImage: bitmapLoader().loadImage,
+      loadBrandIcon: async () => { throw new Error("missing icon"); },
+      createCanvas
+    });
+    assert.equal(blob.type, "image/png");
+  } finally {
+    console.warn = warn;
+  }
+  const text = drawnText(canvases[0]);
+  assert.ok(text.includes(BRAND_NAME) && text.includes(BRAND_LINE));
+  assert.equal(canvases[0].ctx.ops.filter((entry) => entry.op === "drawImage").length, 1);
+});
+
+test("an icon that cannot be drawn still exports, with the text brand mark", async () => {
+  const journey = { name: "Flow", frames: [frame(1)] };
+  const { canvases, createCanvas } = fakeCanvas();
+  const icon = { width: 128, height: 128, closed: false, close() { this.closed = true; } };
+  const warnings = [];
+  const warn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const blob = await renderContactSheet(journey, {
+      loadImage: bitmapLoader().loadImage,
+      loadBrandIcon: async () => icon,
+      createCanvas: (width, height) => {
+        const canvas = createCanvas(width, height);
+        const draw = canvas.ctx.drawImage;
+        canvas.ctx.drawImage = (image, ...args) => { if (image === icon) throw new TypeError("not drawable"); return draw(image, ...args); };
+        return canvas;
+      }
+    });
+    assert.equal(blob.type, "image/png");
+    const { ctx } = canvases[0];
+    const text = ctx.ops.filter((entry) => entry.op === "fillText").map((entry) => entry.args[0]);
+    assert.ok(text.includes(BRAND_NAME) && text.includes(BRAND_LINE));
+    assert.ok(ctx.ops.some((entry) => entry.op === "drawImage" && entry.args[0].id === "frame-1"));
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(icon.closed, true);
+  assert.equal(warnings.length, 1);
+});
+
+test("on the narrowest sheets the brand line is drawn on two lines", async () => {
+  const journey = { name: "Flow", frames: [frame(1, { image: { width: 240, height: 200 } })] };
+  const { canvases, createCanvas } = fakeCanvas();
+  await renderContactSheet(journey, { loadImage: bitmapLoader().loadImage, createCanvas });
+  const lines = canvases[0].ctx.ops.filter((entry) => entry.op === "fillText" && BRAND_LINE.includes(entry.args[0]) && entry.args[0] !== "");
+  assert.deepEqual(lines.map((entry) => entry.args[0]), ["Chrome extension", "github.com/simplybenuk/clicksheet"]);
+  assert.equal(lines[0].args[1], lines[1].args[1]);
+  assert.ok(lines[1].args[2] > lines[0].args[2]);
 });
 
 test("empty Journeys are rejected before any image is loaded", async () => {

@@ -1,6 +1,10 @@
 // Editing a stopped Journey: delete/undo, reorder, settings, full-page
 // capture, redaction, export, copy, and the unsupported-page badge.
+import { layoutContactSheet } from "../../extension/core/export-layout.js";
+import { headerText } from "../../extension/core/export-renderer.js";
 import { MASK, until } from "./harness.mjs";
+
+const DESCRIPTION = "Tidy the screenshots, redact one, then export the sheet with its header.";
 
 export async function run(t) {
   const s = await t.launch();
@@ -12,6 +16,19 @@ export async function run(t) {
   await s.open();
   await s.newJourney();
   check("Export is disabled for an empty Journey", await action("export").isDisabled());
+
+  // Description: autosaves, and counts down near the 280-character limit.
+  const description = toolbar.locator('[data-role="description"]');
+  const count = toolbar.locator('[data-role="description-count"]');
+  const label = toolbar.locator('label[for="cs-description"]');
+  check("the description has a visible label and the spec's placeholder",
+    await label.isVisible() && await label.textContent() === "Description (optional)" && await description.getAttribute("placeholder") === "What is this journey for?");
+  await description.fill("a".repeat(250));
+  check("the remaining count shows near the limit", await count.textContent() === "30 left", await count.textContent());
+  await description.fill(DESCRIPTION);
+  check("the remaining count hides away from the limit", await count.textContent() === "", await count.textContent());
+  const described = await until(s.readJourney, (j) => j?.description === DESCRIPTION);
+  check("the description autosaves to journey.json", described?.description === DESCRIPTION, described?.description);
   for (let n = 0; n < 3; n++) { await action("capture").click(); await s.count(n + 1); await page.waitForTimeout(550); }
   check("three manual captures", await frames.count() === 3);
   const labels = async () => (await frames.allTextContents()).map((text) => text.trim());
@@ -95,6 +112,10 @@ export async function run(t) {
   const sheet = await s.readImage(journey.id, "exports", "untitled-journey.png");
   t.save("sheet.png", sheet.dataUrl.split(",")[1]);
   check("the export is one PNG sized for four cells in one row", sheet.width > 4 * 240, `${sheet.width}x${sheet.height}`);
+  const expected = layoutContactSheet(journey.frames, { header: headerText(journey) });
+  check("the export is headed by the Journey title and description",
+    journey.description === DESCRIPTION && expected.header.description && sheet.width === expected.width && sheet.height === expected.height,
+    `${sheet.width}x${sheet.height}, expected ${expected.width}x${expected.height}`);
   await action("export").click();
   await action("copy-image").click();
   await s.messageMatches(/Copied|could not be copied/);

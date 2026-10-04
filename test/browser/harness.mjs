@@ -86,8 +86,8 @@ function prepareExtension({ openShadow }) {
   manifest.host_permissions = ["<all_urls>"];
   writeFileSync(`${ext}/manifest.json`, JSON.stringify(manifest));
   const worker = readFileSync(`${ext}/service-worker.js`, "utf8");
-  if (!worker.includes("function openClicksheet")) throw new Error("dist/service-worker.js no longer defines openClicksheet; update the harness");
-  writeFileSync(`${ext}/service-worker.js`, `${worker}\nglobalThis.__openClicksheet = openClicksheet;\nglobalThis.__captureFromShortcut = captureFromShortcut;\n`);
+  if (!worker.includes("function openClicksheet") || !worker.includes("const journeys =")) throw new Error("dist/service-worker.js no longer defines openClicksheet and journeys; update the harness");
+  writeFileSync(`${ext}/service-worker.js`, `${worker}\nglobalThis.__openClicksheet = openClicksheet;\nglobalThis.__captureFromShortcut = captureFromShortcut;\nglobalThis.__journeys = journeys;\n`);
   if (openShadow) {
     const toolbar = readFileSync(`${ext}/content/toolbar.js`, "utf8");
     if (!toolbar.includes('mode: "closed"')) throw new Error("dist/content/toolbar.js no longer attaches a closed shadow root; update the harness");

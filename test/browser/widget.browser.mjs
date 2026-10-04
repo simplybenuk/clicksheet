@@ -159,5 +159,61 @@ export async function run(t) {
   const shortcuts = await until(() => toolbar.locator('[data-role="shortcut-list"]').textContent(), (text) => text.startsWith("Capture:"), 3000);
   check("Settings lists the capture and show/hide shortcuts", /^Capture: .+ · Show\/hide: .+$/.test(shortcuts), shortcuts);
   check("Delete is styled as destructive", await toolbar.locator('[data-action="delete"]').evaluate((el) => el.classList.contains("cs-danger")));
+  // A name and description edited while storage is unavailable are held,
+  // then saved once access returns; the widget is not left stuck. Access loss
+  // is simulated in the worker by withdrawing the folder permission.
+  await toolbar.locator('[data-action="settings"]').click();
+  const saveStatus = () => toolbar.locator('[data-role="save-status"]').textContent();
+  const setAccess = (granted) => worker.evaluate((granted) => {
+    const proto = FileSystemHandle.prototype;
+    globalThis.__queryPermission ??= proto.queryPermission;
+    proto.queryPermission = granted ? globalThis.__queryPermission : async () => "prompt";
+  }, granted);
+  await setAccess(false);
+  await toolbar.locator('[data-role="name"]').fill("Held name");
+  await toolbar.locator('[data-role="description"]').fill("Held while the folder was unavailable.");
+  const held = await until(saveStatus, (text) => text === "Storage unavailable", 5000);
+  check("an edit while storage is unavailable is held", held === "Storage unavailable" && await s.messageMatches(/held here/, 5000), held);
+  check("the held edit is not written yet", (await s.readJourney()).description !== "Held while the folder was unavailable.");
+  await setAccess(true);
+  // Returning to the page refreshes the widget, as after Reconnect.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const resumed = await until(saveStatus, (text) => text === "Saved locally", 8000);
+  check("after reconnecting the status returns to Saved locally", resumed === "Saved locally", resumed);
+  const savedHeld = await until(s.readJourney, (j) => j?.description === "Held while the folder was unavailable." && j?.name === "Held name");
+  check("the held name and description are saved to journey.json", savedHeld?.description === "Held while the folder was unavailable." && savedHeld?.name === "Held name", JSON.stringify({ name: savedHeld?.name, description: savedHeld?.description }));
+  const first = (await s.readJourney()).frames[0].id;
+  await frames.first().click();
+  await toolbar.locator('[data-action="move-right"]').click();
+  const afterHeld = await until(async () => (await s.readJourney()).frames[1]?.id, (id) => id === first, 4000);
+  check("commands work again after reconnecting", afterHeld === first && !/held here/.test(await s.message()), await s.message());
+
+  // Overlapping saves: a refresh that starts while a rename is in flight
+  // must not mark the edit saved when that rename then fails. The stub holds
+  // the rename until the test releases it, so no step depends on timing.
+  await worker.evaluate(() => {
+    const journeys = globalThis.__journeys;
+    const original = journeys.request;
+    globalThis.__renameHeld = false;
+    journeys.request = async (...args) => {
+      if (args[1]?.action !== "rename") return original(...args);
+      journeys.request = original;
+      globalThis.__renameHeld = true;
+      await new Promise((done) => { globalThis.__releaseRename = done; });
+      throw new Error("Simulated failed rename.");
+    };
+  });
+  await toolbar.locator('[data-role="name"]').fill("Raced name");
+  await toolbar.locator('[data-role="name"]').blur();
+  const heldRename = await until(() => worker.evaluate(() => globalThis.__renameHeld), Boolean, 5000);
+  check("the debounced rename reaches the worker and is held", heldRename);
+  // The focus listener starts its flush synchronously, so it overlaps the held rename.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  check("an overlapping refresh does not report the held rename as saved", await saveStatus() !== "Saved locally", await saveStatus());
+  await worker.evaluate(() => globalThis.__releaseRename());
+  const raced = await until(s.readJourney, (j) => j?.name === "Raced name", 5000);
+  check("a rename that fails during another save is kept and sent again", raced?.name === "Raced name" && await toolbar.locator('[data-role="name"]').inputValue() === "Raced name", raced?.name);
+  const racedStatus = await until(saveStatus, (text) => text === "Saved locally", 5000);
+  check("the status returns to Saved locally once the rename is written", racedStatus === "Saved locally", racedStatus);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

@@ -22,6 +22,7 @@ export const JOURNEY_FORMAT = "clicksheet-journey";
 export const FORMAT_VERSION = 1;
 
 export const DEFAULT_JOURNEY_NAME = "Untitled Journey";
+export const DESCRIPTION_MAX_LENGTH = 280;
 export const DEFAULT_SETTINGS = Object.freeze({
   captureArea: "viewport",
   captureDelayMs: 500
@@ -172,7 +173,8 @@ export function createStorage(
       throw new JourneyFormatError(`Journey ${id} was saved by a newer version of Clicksheet.`);
     }
 
-    return journey;
+    // Journeys saved before descriptions existed read as having none.
+    return { ...journey, description: normalizeDescription(journey.description) };
   }
 
   // Reads every Journey folder. Folders that cannot be read are reported and
@@ -281,6 +283,7 @@ export function createStorage(
       version: FORMAT_VERSION,
       id: createId(),
       name: normalizeName(name),
+      description: "",
       createdAt: timestamp,
       updatedAt: timestamp,
       settings: { ...DEFAULT_SETTINGS },
@@ -311,6 +314,7 @@ export function createStorage(
       format: JOURNEY_FORMAT,
       version: FORMAT_VERSION,
       name: normalizeName(journey.name),
+      description: normalizeDescription(journey.description),
       // A millisecond timestamp is also the optimistic concurrency token.
       // Ensure successive saves cannot reuse it, even with a fixed clock.
       updatedAt: new Date(Math.max(
@@ -489,6 +493,13 @@ export async function migrateRoot(source, destination) {
 function normalizeName(name) {
   const trimmed = typeof name === "string" ? name.trim() : "";
   return trimmed || DEFAULT_JOURNEY_NAME;
+}
+
+// Counted in characters. The widget's maxlength counts UTF-16 units, so text it
+// accepts is never cut here.
+export function normalizeDescription(description) {
+  const trimmed = typeof description === "string" ? description.trim() : "";
+  return Array.from(trimmed).slice(0, DESCRIPTION_MAX_LENGTH).join("").trimEnd();
 }
 
 function summarize(journey) {
