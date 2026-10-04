@@ -29,3 +29,24 @@ export function nextExportName(slug, existingNames = []) {
     }
   }
 }
+
+// A base name free for every extension in the pair, so an image and its
+// context file always share one name and neither overwrites anything.
+export function nextExportBase(slug, existingNames = [], extensions = [".png", ".json"]) {
+  const taken = new Set([...existingNames].map((name) => String(name).toLowerCase()));
+
+  for (let suffix = 1; ; suffix += 1) {
+    const base = suffix === 1 ? slug : `${slug}-${suffix}`;
+
+    if (extensions.every((extension) => !taken.has(`${base}${extension}`.toLowerCase()))) {
+      return base;
+    }
+  }
+}
+
+// Local date and time for Downloads names, which cannot be checked for
+// clashes in advance: `2026-09-29-1530`.
+export function exportTimestamp(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+}

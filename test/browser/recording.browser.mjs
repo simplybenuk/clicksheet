@@ -3,7 +3,7 @@ import { until } from "./harness.mjs";
 
 export async function run(t) {
   const s = await t.launch({ windowSize: "1280,1600" });
-  const { page, toolbar, frames } = s;
+  const { page, toolbar, frames, worker } = s;
   const { check } = t;
   // Captured data must stay local (FR-001.5): record every request the pages
   // and the extension worker make while recording.
@@ -42,6 +42,11 @@ export async function run(t) {
   check("async page change creates a frame", await s.count(2));
   const firstLabel = await frames.nth(0).textContent();
   check("preceding frame labelled with the target", firstLabel.includes('Click "Load details"'), firstLabel);
+  const clicked = (await until(s.readJourney, (j) => j?.frames[0]?.interaction)).frames[0];
+  check("frames keep the page origin, and clicks keep the target's role and tag",
+    clicked.origin === s.base && clicked.interaction?.role === "button" && clicked.interaction?.tag === "button",
+    `${clicked.origin} ${clicked.interaction?.role} ${clicked.interaction?.tag}`);
+  check("the stored page has no query string", !JSON.stringify(clicked).includes("?"));
   await page.click('[data-action="load-details"]');
   await page.waitForTimeout(150);
   await page.click('[data-action="load-details"]');
@@ -58,7 +63,7 @@ export async function run(t) {
   const other = await s.context.newPage();
   await other.goto(`${s.base}/?other`);
   await other.bringToFront();
-  const paused = await until(async () => { const j = await s.readJourney(); return `${j.state}/${j.pauseReason}`; }, (v) => v === "Paused/tab");
+  const paused = await until(async () => { const j = await s.readJourney(); return `${j?.state}/${j?.pauseReason}`; }, (v) => v === "Paused/tab");
   check("switching tabs pauses the Journey", paused === "Paused/tab", paused);
   await page.bringToFront();
   await page.waitForFunction(() => document.querySelector("clicksheet-toolbar")?.shadowRoot
@@ -75,6 +80,57 @@ export async function run(t) {
   check("screenshots are stored as PNG files", image.bytes > 1000 && image.dataUrl.startsWith("data:image/png"), `${image.width}x${image.height}`);
   check("the widget is hidden in captured pixels", image.pixels.every((pixel) => pixel !== "27,30,38"), `pixels=${image.pixels.join(" | ")}`);
   check("frame metadata has no query or hash", journey.frames.every((f) => !/[?#]/.test(f.pathname)), journey.frames.map((f) => f.pathname).join(" "));
+  // The context for these real clicks (FR-C2): what an agent would receive.
+  const contextText = await worker.evaluate(async (base) => {
+    const [tab] = await chrome.tabs.query({ url: `${base}/*` });
+    return (await globalThis.__journeys.request(tab.id, { action: "export", destination: "context" })).context;
+  }, s.base);
+  const context = JSON.parse(contextText);
+  const clickedStep = context.steps.find((step) => step.interaction?.name === "Load details");
+  check("the context describes each real click by name, role and tag, with the page's site and path",
+    context.steps.length === journey.frames.length && clickedStep?.interaction.role === "button" && clickedStep.interaction.tag === "button" &&
+    clickedStep.page.origin === s.base && clickedStep.page.pathname.startsWith("/") && context.steps.every((step) => Number.isFinite(step.sinceStartMs)),
+    JSON.stringify(clickedStep));
+  check("the context carries no query string or fragment", !/[?#]/.test(context.steps.map((step) => step.page.pathname).join("")) && !contextText.includes("token="));
+
+  // Redaction over a real click (AC-C1): draw a box in the editor over the
+  // button that was clicked, then read the context and the widget label.
+  await toolbar.locator('[data-action="stop"]').click();
+  await until(async () => (await s.readJourney())?.state, (state) => state === "Stopped");
+  await frames.nth(0).click();
+  const [editor] = await Promise.all([s.context.waitForEvent("page"), toolbar.locator('[data-action="edit"]').click()]);
+  editor.on("pageerror", (error) => s.errors.push(`editor: ${error.message}`));
+  await editor.waitForLoadState();
+  const canvas = editor.locator("canvas");
+  await canvas.waitFor();
+  await editor.waitForFunction(() => document.querySelector("canvas")?.getBoundingClientRect().height > 200);
+  const shown = await canvas.boundingBox();
+  const toCanvas = shown.width / first.image.width;
+  const rect = clicked.interaction.rect;
+  const [left, top] = [(rect.x * scale) * toCanvas, (rect.y * scale) * toCanvas];
+  const [right, bottom] = [((rect.x + rect.width) * scale) * toCanvas, ((rect.y + rect.height) * scale) * toCanvas];
+  await editor.mouse.move(shown.x + left - 4, shown.y + top - 4);
+  await editor.mouse.down();
+  await editor.mouse.move(shown.x + right + 4, shown.y + bottom + 4, { steps: 5 });
+  await editor.mouse.up();
+  const closed = editor.waitForEvent("close", { timeout: 8000 }).then(() => true, () => false);
+  await editor.getByRole("button", { name: /apply/i }).click();
+  check("the editor applies a box over the clicked button", await closed);
+  const redactedJourney = await until(s.readJourney, (j) => j?.frames[0]?.redacted === true);
+  check("the box is stored on the frame", redactedJourney.frames[0].masks?.length === 1, JSON.stringify(redactedJourney.frames[0].masks));
+  const redactedContext = JSON.parse(await worker.evaluate(async (base) => {
+    const [tab] = await chrome.tabs.query({ url: `${base}/*` });
+    return (await globalThis.__journeys.request(tab.id, { action: "export", destination: "context" })).context;
+  }, s.base));
+  const covered = redactedContext.steps[0].interaction;
+  check("a box over the clicked button removes only its name from the context",
+    redactedContext.steps[0].redacted === true && covered?.name === null && covered.role === "button" && covered.tag === "button" && covered.box?.width > 0 &&
+    redactedContext.steps.some((step, index) => index > 0 && step.interaction?.name === "Load details"),
+    JSON.stringify(covered));
+  await page.bringToFront();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const coveredLabel = await until(() => frames.nth(0).textContent(), (text) => !text.includes("Load details"));
+  check("the widget labels the redacted step as a plain Click", /^1\. Click$/.test(coveredLabel.trim()), coveredLabel);
   check("no request left the machine while recording", seen > 0 && external.length === 0, `${seen} requests seen; external: ${external.slice(0, 3).join(" ") || "none"}`);
   check("no page errors", s.errors.length === 0, s.errors.join("; "));
 }

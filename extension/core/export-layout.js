@@ -5,6 +5,8 @@
 // the tallest screenshot (capped), then a text block below it. Screenshots are
 // contained and centred in the image area, so their aspect ratio is kept.
 
+import { visibleInteractionName } from "./interaction-name.js";
+
 export const MAX_COLUMNS = 6;
 export const DEFAULT_IMAGE_WIDTH = 640;
 // Screenshots are drawn at up to their captured width, so zooming into the
@@ -286,9 +288,11 @@ export function frameLines(frame, maxChars = 60) {
   ];
 }
 
+// A name that a redaction box may hide is left out, exactly as in the context
+// file, so the image and the JSON never disagree (FR-C2.3).
 export function interactionText(frame, maxChars = 60) {
   if (frame?.interaction) {
-    const label = clean(frame.interaction.label);
+    const label = visibleInteractionName(frame);
     // Truncate inside the quotes so the closing quote survives.
     return label ? `Click "${truncate(label, Math.max(1, maxChars - 8))}"` : "Click";
   }

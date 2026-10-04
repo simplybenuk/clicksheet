@@ -125,6 +125,18 @@ export function sanitizePathname(value) {
   }
 }
 
+// Only a real scheme://host[:port] origin is kept; opaque origins ("null")
+// and anything that is not an origin become null.
+export function sanitizeOrigin(value) {
+  if (typeof value !== "string" || !value || value === "null") return null;
+  try {
+    const { origin } = new URL(value);
+    return origin && origin !== "null" ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
 // A capture is metadata about already sanitized pixels; it never claims an
 // interaction target (manual frames must not, FR-007.3).
 export function buildFrame({ id, kind, page, image, capturedAt, segment = 0 }) {
@@ -136,6 +148,7 @@ export function buildFrame({ id, kind, page, image, capturedAt, segment = 0 }) {
     kind,
     label: FRAME_LABELS[kind],
     title: String(page?.title ?? "").slice(0, 300),
+    origin: sanitizeOrigin(page?.origin),
     pathname: sanitizePathname(page?.pathname),
     capturedAt,
     segment,
@@ -165,6 +178,9 @@ export function attachInteraction(frame, click) {
     interaction: {
       type: "click",
       label: String(click.label ?? "").trim().slice(0, 80),
+      // A role is an ARIA token, never free page text, since it survives redaction.
+      role: typeof click.role === "string" && /^[a-z][a-z-]{0,39}$/.test(click.role) ? click.role : null,
+      tag: typeof click.tag === "string" && /^[a-z][a-z0-9-]{0,39}$/.test(click.tag) ? click.tag : null,
       rect: { x: finite(rect.x, 0) + dx, y: finite(rect.y, 0) + dy, width: Math.max(0, finite(rect.width, 0)), height: Math.max(0, finite(rect.height, 0)) },
       point: click.point ? { x: finite(click.point.x, 0) + dx, y: finite(click.point.y, 0) + dy } : null
     }

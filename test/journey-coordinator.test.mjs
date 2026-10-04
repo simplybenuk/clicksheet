@@ -85,3 +85,32 @@ test("describe saves the description of the addressed Journey only", async () =>
   await assert.rejects(coordinator.request(1, { action: "describe", journeyId: "missing", description: "x" }), /not found/);
   await assert.rejects(coordinator.request(1, { action: "describe", journeyId: id, description: 5 }), /cannot be changed/);
 });
+
+test("a rename or describe without a Journey id, or for a Journey the tab does not show, changes nothing", async () => {
+  const { coordinator, volume } = setup();
+  const first = (await coordinator.request(1, { action: "new" })).currentJourney.id;
+  const second = (await coordinator.request(1, { action: "new", journeyId: first })).currentJourney.id;
+  const storage = createStorage(volume.root);
+  const texts = async () => Promise.all([first, second].map(async (id) => {
+    const { name, description } = await storage.loadJourney(id);
+    return `${name}|${description ?? ""}`;
+  }));
+  const before = await texts();
+  // No id is never read as "the Journey shown now".
+  for (const journeyId of [undefined, null, ""]) {
+    await assert.rejects(coordinator.request(1, { action: "rename", journeyId, name: "Stale text" }), /did not say which Journey/);
+    await assert.rejects(coordinator.request(1, { action: "describe", journeyId, description: "Stale text" }), /did not say which Journey/);
+  }
+  // The tab shows the second Journey; text addressed to the first is refused
+  // and the tab is not switched to it.
+  const refused = await coordinator.request(1, { action: "rename", journeyId: first, name: "Stale text" }).catch((error) => error);
+  assert.match(refused.message, /Another Journey is shown in this tab/);
+  assert.equal(refused.view.currentJourney.id, second);
+  await assert.rejects(coordinator.request(1, { action: "describe", journeyId: first, description: "Stale text" }), /Another Journey is shown/);
+  // A Journey whose folder was removed by hand: refused, never redirected.
+  await volume.root.getDirectoryHandle("journeys").then((dir) => dir.removeEntry(second, { recursive: true }));
+  await assert.rejects(coordinator.request(1, { action: "rename", journeyId: second, name: "Stale text" }), /not found/);
+  await assert.rejects(coordinator.request(1, { action: "rename", name: "Stale text" }), /did not say which Journey/);
+  const { name, description } = await storage.loadJourney(first);
+  assert.equal(`${name}|${description ?? ""}`, before[0], "the other Journey is untouched");
+});

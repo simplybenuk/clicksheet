@@ -51,6 +51,10 @@
         <button type="button" class="cs-icon" data-action="dismiss" aria-label="Hide Clicksheet" title="Hide (click the Clicksheet icon to bring it back)">✕</button>
       </div>
       <p data-role="message" class="cs-message" aria-live="polite">Connecting to your local library…</p>
+      <div class="cs-export-bar" data-role="export-bar" hidden>
+        <iframe data-role="export-bar-frame" title="Saved export: Open or Show in folder"></iframe>
+        <button type="button" class="cs-icon" data-action="dismiss-export" aria-label="Close the saved export bar" title="Close">✕</button>
+      </div>
       <div class="cs-panel" data-role="panel" hidden>
         <div class="clicksheet-toolbar__heading">
           <input data-role="name" aria-label="Journey name" placeholder="Choose or create a Journey">
@@ -86,7 +90,8 @@
         </div>
         <div class="clicksheet-toolbar__menu" data-role="export-menu" hidden>
           <button type="button" data-action="copy-image">Copy image</button>
-          <button type="button" data-action="download-image">Download image</button>
+          <button type="button" data-action="copy-context">Copy context</button>
+          <button type="button" data-action="save-export">Save image and context</button>
         </div>
         <form class="clicksheet-toolbar__menu" data-role="settings-menu" hidden>
           <label>Capture area
@@ -99,6 +104,12 @@
             <input data-role="capture-delay" type="number" min="0" max="10000" step="50" inputmode="numeric">
           </label>
           <button type="submit" data-action="save-settings">Save settings</button>
+          <label>Export to
+            <select data-role="export-destination">
+              <option value="downloads">Downloads (Clicksheet folder)</option>
+              <option value="library">Clicksheet folder › exports</option>
+            </select>
+          </label>
           <div class="cs-shortcuts">
             <span>Keyboard shortcuts</span>
             <span data-role="shortcut-list">Checking…</span>
@@ -131,12 +142,25 @@
   let selectedFrame = null;
   let busy = false;
   let refreshQueued = false;
-  // The name and description share one pending-edit revision and debounce.
+  // Unsaved name and description text. Invariants (the worker holds I3):
+  // I1. Pending edits belong to the Journey they were typed in. `edits`
+  //     carries that Journey's id and the typed text from the input event on,
+  //     and a flush sends exactly those, never what the view shows later.
+  // I2. `edits` is non-null only while the widget's view can still be showing
+  //     that Journey. `adopt()` is the one place the view is replaced, and it
+  //     drops the edits (`dropEdits`) when the new view shows another Journey,
+  //     or none while storage is available. Dropped text is never sent
+  //     anywhere: the user is told, the fields are repainted from the view,
+  //     and nothing is left pending ("Saving", the unload prompt).
+  // I3. The worker refuses a rename or describe whose `journeyId` is missing
+  //     or is not the Journey the tab shows (journey-coordinator.js).
+  // I4. While storage is unavailable the view cannot contradict the edits, so
+  //     they stay held and are sent again, to the same id, after Reconnect.
+  // `edits` is null when nothing is unsaved, so "pending" has one meaning.
+  let edits = null; // { journeyId, values: { name?, description? }, revision }
   let editTimer = null;
-  let editRevision = 0;
-  let savedRevision = 0;
-  const editedFields = new Set();
   let saveFailed = false;
+  let fieldsJourney = null; // the Journey whose text the two fields show
   let notice = "";
   let requestTail = Promise.resolve();
   let flushTail = Promise.resolve();
@@ -201,14 +225,21 @@
   function render() {
     const journey = view?.currentJourney;
     const controls = view?.controls ?? {};
-    if (shadow.activeElement !== role("name") && savedRevision === editRevision) role("name").value = journey?.name ?? "";
-    if (shadow.activeElement !== role("description") && savedRevision === editRevision) role("description").value = journey?.description ?? "";
+    // With nothing pending, the fields show the view. A field being typed in
+    // is left alone, unless it still shows another Journey's text.
+    if (!edits) {
+      const shown = journey?.id ?? null;
+      for (const [field, text] of [["name", journey?.name ?? ""], ["description", journey?.description ?? ""]]) {
+        if (shadow.activeElement !== role(field) || fieldsJourney !== shown) role(field).value = text;
+      }
+      fieldsJourney = shown;
+    }
     role("name").disabled = busy || !journey || !view?.renamable;
     role("description").disabled = role("name").disabled;
     renderDescriptionCount();
     role("state").textContent = journey?.state ?? "Ready";
     renderElapsed();
-    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : savedRevision < editRevision ? "Saving" : view?.status ?? "";
+    role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : edits ? "Saving" : view?.status ?? "";
     role("message").textContent = notice || view?.message?.text || statusMessage(journey);
     // Notices and warnings must be seen even when the widget is collapsed.
     role("message").dataset.notice = String(Boolean(notice || view?.message?.tone === "warn" || view?.status === "Storage unavailable" || view?.recordingElsewhere));
@@ -229,7 +260,8 @@
     action("stop").hidden = !active;
     for (const name of ["record", "pause", "resume", "stop", "capture"]) action(name).disabled = busy || !controls[name];
     action("export").disabled = busy || !view?.canExport;
-    if (action("export").disabled) toggleMenu("export-menu", false);
+    // A busy widget keeps an open menu: its commands wait their turn in run().
+    if (!view?.canExport) toggleMenu("export-menu", false);
     const frames = journey?.frames ?? [];
     const selectedIndex = frames.findIndex((frame) => frame.id === selectedFrame);
     if (selectedIndex === -1) selectedFrame = null;
@@ -246,6 +278,11 @@
       role("capture-delay").value = String(journey.settings?.captureDelayMs ?? 500);
     }
     action("save-settings").disabled = busy || !journey || !view?.editable;
+    // Applies to every Journey, so it saves on change rather than with the
+    // Journey's capture settings.
+    if (shadow.activeElement !== role("export-destination")) role("export-destination").value = view?.exportDestination ?? "downloads";
+    role("export-destination").disabled = busy || !view;
+    renderExportBar();
     renderStrip(journey, controls);
     root.dataset.recording = String(journey?.state === "Recording");
     role("count").textContent = journey?.frames.length ? `${journey.frames.length} shot${journey.frames.length === 1 ? "" : "s"}` : "";
@@ -446,18 +483,41 @@
     command = { journeyId: view?.currentJourney?.id, ...command };
     const pending = requestTail.then(async () => {
       const result = await chrome.runtime.sendMessage({ type: "clicksheet:journey", command });
+      // Every response that has a view replaces the widget's, failures
+      // included: a failed command can still change what the worker holds
+      // (a failed Save has no bar; a refused command means another Journey is
+      // shown), and the error must never sit next to the earlier state.
+      if (result?.view) adopt(result.view);
       if (!result?.ok) throw new Error(result?.error || "Reload the extension and reopen Clicksheet.");
-      view = result.view;
-      elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
-      elapsedAt = performance.now();
-      if (view.notice) notice = view.notice;
+      if (view.notice) showResult(view.notice);
       return view;
     });
     requestTail = pending.catch(() => {});
     return pending;
   }
+  // The one place the widget's view is replaced (I2).
+  const EDITS_DROPPED = "The Journey you were editing is no longer shown here, so the name or description you typed was not saved.";
+  function adopt(next) {
+    view = next;
+    elapsedBase = Number.isFinite(view.elapsedMs) ? view.elapsedMs : null;
+    elapsedAt = performance.now();
+    if (!edits) return;
+    const shown = view.currentJourney?.id ?? null;
+    // No Journey while storage is unavailable says nothing about the edits
+    // (I4); any other mismatch means their Journey is gone from this tab.
+    if (shown === edits.journeyId || (shown === null && !view.available)) return;
+    dropEdits();
+  }
+  function dropEdits() {
+    edits = null;
+    saveFailed = false;
+    if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
+    role("name").value = view?.currentJourney?.name ?? "";
+    role("description").value = view?.currentJourney?.description ?? "";
+    showFailure(EDITS_DROPPED);
+  }
   // One flush at a time: a call made while another is in flight waits for it
-  // and then runs its own pass, so fields, revision and status are only ever
+  // and then runs its own pass, so values, revision and status are only ever
   // judged in order. Errors still reach each caller.
   function flushEdits() {
     if (editTimer !== null) { clearTimeout(editTimer); editTimer = null; }
@@ -466,35 +526,101 @@
     return pending;
   }
   async function flushOnce() {
-    if (savedRevision === editRevision) return;
-    const revision = editRevision;
-    const fields = [...editedFields];
-    editedFields.clear();
+    const batch = edits;
+    if (!batch) return;
+    const { revision, journeyId } = batch;
+    const values = batch.values;
+    batch.values = {};
+    // Every request names the Journey the text was typed in (I1), and nothing
+    // is sent once the edits have been dropped (I2).
+    const send = async (command) => {
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+      await request({ ...command, journeyId });
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+    };
     try {
-      // With no fields to send, refresh the view so a stale status is not judged.
-      if (!fields.length) await request({ action: "snapshot" });
-      if (fields.includes("name")) await request({ action: "rename", name: role("name").value });
-      if (fields.includes("description")) await request({ action: "describe", description: role("description").value });
-      // Held fields are kept and sent again on the next flush, which also
+      // With nothing to send, refresh the view so a stale status is not judged.
+      if (!Object.keys(values).length) await send({ action: "snapshot" });
+      if ("name" in values) await send({ action: "rename", name: values.name });
+      if ("description" in values) await send({ action: "describe", description: values.description });
+      // Held values are kept and sent again on the next flush, which also
       // brings a fresh view once storage is reconnected.
       if (view.status !== "Saved locally" || view.hasUnsavedChanges) throw new Error("The change is held here. Reconnect the folder on the Storage page, then return to save it.");
     } catch (error) {
-      for (const field of fields) editedFields.add(field);
+      // Dropped edits are not a failed save: there is nothing left to keep.
+      // The caller still stops, because what it was about to do was decided
+      // while the dropped Journey was shown.
+      if (edits !== batch) throw new Error(EDITS_DROPPED);
+      // Text typed during the flush is newer than what was sent.
+      batch.values = { ...values, ...batch.values };
       saveFailed = true;
       throw error;
     }
     saveFailed = false;
-    savedRevision = Math.max(savedRevision, revision);
+    if (batch.revision === revision) edits = null;
   }
-  async function run(command) {
-    if (busy) return;
+  // Every user command goes through this one gate and runs in click order.
+  // What a command acts on is fixed at the click: it carries the Journey then
+  // shown (`asShown`; the worker refuses it if another command changed the
+  // Journey meanwhile), and ✕ carries the bar's download id. Background
+  // refreshes are not queued: one already running, or `refreshQueued`,
+  // covers them.
+  // Results stay until the next result. A command may clear the message or
+  // show its pending text only if no result arrived after its click
+  // (`resultCount`), so a queued command never hides an outcome, such as a
+  // failed save, that the user has not had a chance to see.
+  // A failure also outlasts the successes of commands clicked before it
+  // arrived: their message is added after it instead of replacing it
+  // (`lastFailure`), so a Copy queued behind a failed Save shows both.
+  // `task.finish(result, failure)` lets a command report its own outcome, as
+  // the clipboard copies do.
+  const MAX_QUEUED = 8;
+  const commandQueue = [];
+  let resultCount = 0;
+  let running = null;
+  let lastFailure = null;
+  let supersededExport = null;
+  function showResult(text) {
+    const unseen = running && lastFailure && lastFailure.count > running.clickedAt ? lastFailure.text : "";
+    notice = [unseen, text].filter(Boolean).join(" ");
+    resultCount++;
+  }
+  function showFailure(text) {
+    notice = text;
+    lastFailure = { text, count: ++resultCount };
+  }
+  function run(command, task = {}) {
+    if (command.action !== "snapshot" && view && !("journeyId" in command)) {
+      command = { journeyId: view.currentJourney?.id ?? null, asShown: true, ...command };
+    }
+    const entry = { command, ...task, clickedAt: resultCount };
+    if (!busy) { void execute(entry); return; }
+    if (command.action === "snapshot") return;
+    if (commandQueue.length < MAX_QUEUED) { commandQueue.push(entry); render(); return; }
+    void report(entry, undefined, new Error("Clicksheet is still busy. Try again in a moment.")).finally(render);
+  }
+  async function report({ finish = null }, result, failure) {
+    try {
+      if (finish) await finish(result, failure);
+      else if (failure) showFailure(failure.message);
+    } catch (error) {
+      showFailure(error?.message || String(error));
+    }
+  }
+  async function execute(entry) {
+    const { command, pending = "", clickedAt } = entry;
     busy = true;
-    if (command.action !== "snapshot") notice = "";
+    running = entry;
+    // A Save replaces the bar of the save before it, whatever happens next:
+    // that bar goes when the Save starts and is not shown again.
+    if (command.action === "export" && command.destination === "save") supersededExport = view?.lastExport?.downloadId ?? null;
+    if (command.action !== "snapshot" && resultCount === clickedAt) notice = pending;
     let failure = null;
+    let result;
     render();
     try {
       await flushEdits();
-      await request(command);
+      result = await request(command);
       if (command.action === "open" || command.action === "new") {
         selectedFrame = null;
         role("library").hidden = true;
@@ -502,7 +628,7 @@
         role("name").value = view.currentJourney?.name ?? "";
         role("description").value = view.currentJourney?.description ?? "";
       }
-      if (command.action === "delete-frame") notice = "Screenshot deleted. Use Undo delete to restore it.";
+      if (command.action === "delete-frame") showResult("Screenshot deleted. Use Undo delete to restore it.");
       if (command.action === "undo-delete") selectedFrame = command.frameId ?? selectedFrame;
       // Recording is about the page, so the widget shrinks to its controls;
       // stopping brings back the strip for editing and export.
@@ -514,11 +640,22 @@
         requestAnimationFrame(() => { strip.scrollLeft = strip.scrollWidth; });
       }
     } catch (error) { failure = error; }
-    finally {
+    // The worker drops the earlier bar when it is asked to Save. A Save that
+    // failed before it got there (its edits could not be flushed) drops it
+    // here, so the bar does not come back when a navigation re-creates the
+    // widget. One rule: a bar never outlasts the next Save, however it ends.
+    if (failure && supersededExport !== null && view?.lastExport?.downloadId === supersededExport) {
+      await request({ action: "dismiss-export", downloadId: supersededExport, journeyId: undefined }).catch(() => {});
+    }
+    try {
+      await report(entry, result, failure);
+    } finally {
       busy = false;
-      if (failure) notice = failure.message;
+      running = null;
       render();
-      if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
+      const next = commandQueue.shift();
+      if (next) void execute(next);
+      else if (refreshQueued) { refreshQueued = false; void run({ action: "snapshot" }); }
     }
   }
 
@@ -622,6 +759,22 @@
   // paragraphs or editors is page content that a later redaction could not
   // remove from the export, so those targets are labelled just "Click".
   const TEXT_NAMED = "a[href], button, summary, label, [role='button'], [role='link'], [role='tab'], [role='menuitem'], [role='option'], [role='checkbox']";
+  // The ARIA role an agent would see: explicit, or implied by the element.
+  // Only common implicit roles are mapped; anything else is null.
+  const IMPLICIT_ROLES = [
+    ["a[href], area[href]", "link"], ["button, summary, input[type='button'], input[type='submit'], input[type='reset'], input[type='image']", "button"],
+    ["input[type='checkbox']", "checkbox"], ["input[type='radio']", "radio"], ["input[type='range']", "slider"],
+    ["select", "combobox"], ["textarea, input:not([type]), input[type='text'], input[type='email'], input[type='tel'], input[type='url'], input[type='password']", "textbox"],
+    ["input[type='search']", "searchbox"], ["input[type='number']", "spinbutton"],
+    ["option", "option"], ["img[alt]:not([alt=''])", "img"]
+  ];
+  function targetRole(element) {
+    // An explicit role must look like an ARIA role token; anything else is
+    // page text, which would survive redaction, so it is dropped.
+    const explicit = element.getAttribute("role")?.trim().split(/\s+/)[0]?.toLowerCase();
+    if (explicit) return /^[a-z][a-z-]{0,39}$/.test(explicit) ? explicit : null;
+    return IMPLICIT_ROLES.find(([selector]) => element.matches(selector))?.[1] ?? null;
+  }
   function describeTarget(element) {
     if (!element.matches(INTERACTIVE) || element.isContentEditable) return "";
     const clean = (text) => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
@@ -646,6 +799,9 @@
         scrollX: window.scrollX,
         scrollY: window.scrollY,
         label: describeTarget(element),
+        role: targetRole(element),
+        tag: element.localName,
+        origin: location.origin,
         pathname: location.pathname
       }
     });
@@ -777,6 +933,7 @@
     const page = document.scrollingElement ?? document.documentElement;
     return {
       title: document.title,
+      origin: location.origin,
       pathname: location.pathname,
       viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY, devicePixelRatio },
       scrollWidth: page.scrollWidth,
@@ -827,25 +984,75 @@
     for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
     return new Blob([bytes], { type: "image/png" });
   }
-  function copyImage() {
-    if (busy) return;
+  // The bar is an extension page (see pages/export-bar.js); it is reloaded
+  // for each new download so it never shows an older file.
+  // A bar that a later Save has replaced (`supersededExport`) stays hidden
+  // even if the view still names it, as it does until that Save reaches the
+  // worker or if the Save fails before it gets there.
+  function renderExportBar() {
+    const saved = view?.lastExport && view.lastExport.downloadId !== supersededExport ? view.lastExport : null;
+    role("export-bar").hidden = !saved;
+    if (!saved) return;
+    const frame = role("export-bar-frame");
+    if (frame.dataset.downloadId !== String(saved.downloadId)) {
+      frame.dataset.downloadId = String(saved.downloadId);
+      // `?download=` only changes the URL so the frame reloads. The page never
+      // reads it: it asks the worker for this tab's latest export instead.
+      frame.src = chrome.runtime.getURL(`pages/export-bar.html?download=${encodeURIComponent(saved.downloadId)}`);
+    }
+  }
+  // Copy must call the clipboard inside the click, so the clipboard is handed
+  // a promise straight away and the export itself goes through the command
+  // gate like every other action. If the widget is busy the copy waits its
+  // turn, and the promise settles when it has run.
+  function copyToClipboard({ destination, type, pending, toBlob, failed, done }) {
     toggleMenu("export-menu", false);
-    busy = true;
-    notice = "Preparing the image…";
-    render();
-    const rendered = request({ action: "export", destination: "copy" }).then((result) => pngFromDataUrl(result.image));
+    let deliver;
+    const content = new Promise((resolve, reject) => { deliver = { resolve, reject }; });
+    content.catch(() => {});
     let copied;
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("unsupported");
-      copied = navigator.clipboard.write([new ClipboardItem({ "image/png": rendered })]);
+      copied = navigator.clipboard.write([new ClipboardItem({ [type]: content })]);
     } catch (error) {
       copied = Promise.reject(error);
     }
-    Promise.allSettled([rendered, copied]).then(([image, clipboard]) => {
-      if (image.status === "rejected") notice = image.reason.message;
-      else if (clipboard.status === "rejected") notice = "The image could not be copied on this page. Use Download image instead.";
-      else notice = "Copied the contact sheet. Paste it into your agent or issue.";
-    }).finally(() => { busy = false; render(); });
+    copied.catch(() => {});
+    notice = pending;
+    run({ action: "export", destination }, {
+      pending,
+      async finish(result, failure) {
+        if (failure) deliver.reject(failure);
+        else {
+          try { deliver.resolve(toBlob(result)); } catch (error) { deliver.reject(error); failure = error; }
+        }
+        const [clipboard] = await Promise.allSettled([copied]);
+        if (failure) showFailure(failure.message);
+        else if (clipboard.status === "rejected") showFailure(failed);
+        else showResult(done);
+      }
+    });
+    render();
+  }
+  function copyContext() {
+    copyToClipboard({
+      destination: "context",
+      type: "text/plain",
+      pending: "Preparing the context…",
+      toBlob: (result) => new Blob([result.context], { type: "text/plain" }),
+      failed: "The context could not be copied on this page. Use Save image and context instead.",
+      done: "Copied the step context as JSON. Paste it next to the contact sheet."
+    });
+  }
+  function copyImage() {
+    copyToClipboard({
+      destination: "copy",
+      type: "image/png",
+      pending: "Preparing the image…",
+      toBlob: (result) => pngFromDataUrl(result.image),
+      failed: "The image could not be copied on this page. Use Save image and context instead.",
+      done: "Copied the contact sheet. Paste it into your agent or issue."
+    });
   }
   function toggleMenu(name, open) {
     const menu = role(name);
@@ -1067,13 +1274,23 @@
     role("description-count").textContent = left <= 40 ? `${left} left` : "";
   }
   function scheduleEdit(field) {
-    editedFields.add(field);
-    editRevision += 1;
+    const journeyId = view?.currentJourney?.id;
+    if (!journeyId) return;
+    // By I2, pending edits are always for the Journey shown, so this only
+    // ever starts a batch for the Journey being typed in or adds to it.
+    if (edits?.journeyId !== journeyId) edits = { journeyId, values: {}, revision: 0 };
+    edits.values[field] = role(field).value;
+    edits.revision += 1;
     role("save-status").textContent = saveFailed || view?.status === "Storage unavailable" ? "Storage unavailable" : "Saving";
     clearTimeout(editTimer);
     editTimer = setTimeout(async () => {
       try { await flushEdits(); render(); }
-      catch (error) { role("save-status").textContent = "Storage unavailable"; role("message").textContent = error.message; }
+      catch (error) {
+        // A failed save shows its reason until the next render. Dropped
+        // edits are not a failed save, and their notice is already set.
+        render();
+        if (saveFailed) role("message").textContent = error.message;
+      }
     }, 400);
   }
   role("name").addEventListener("input", () => scheduleEdit("name"));
@@ -1087,7 +1304,10 @@
   action("export").addEventListener("click", () => { toggleMenu("settings-menu", false); toggleMenu("export-menu"); });
   action("settings").addEventListener("click", () => { toggleMenu("export-menu", false); toggleMenu("settings-menu"); void refreshShortcuts(); });
   action("copy-image").addEventListener("click", copyImage);
-  action("download-image").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "download" }); });
+  action("copy-context").addEventListener("click", copyContext);
+  action("save-export").addEventListener("click", () => { toggleMenu("export-menu", false); void run({ action: "export", destination: "save" }); });
+  action("dismiss-export").addEventListener("click", () => void run({ action: "dismiss-export", downloadId: view?.lastExport?.downloadId ?? null }));
+  role("export-destination").addEventListener("change", () => void run({ action: "export-settings", destination: role("export-destination").value }));
   role("settings-menu").addEventListener("submit", (event) => {
     event.preventDefault();
     toggleMenu("settings-menu", false);
@@ -1110,7 +1330,7 @@
   action("storage").addEventListener("click", () => { void flushEdits().catch(() => {}); void chrome.runtime.sendMessage({ type: "clicksheet:open-storage" }); });
   action("dismiss").addEventListener("click", () => { root.hidden = true; void flushEdits().catch(() => {}); });
   window.addEventListener("beforeunload", (event) => {
-    if (savedRevision !== editRevision || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
+    if (edits || view?.hasUnsavedChanges) { event.preventDefault(); event.returnValue = ""; }
   });
   window.addEventListener("focus", () => { if (!root.hidden && !busy) void run({ action: "snapshot" }); });
   // A hidden tab keeps ticking locally; refresh the real elapsed time on return.
@@ -1147,7 +1367,7 @@
     }
     if (message?.type === "clicksheet:notice") {
       // A failed shortcut capture must be visible even if the toolbar was hidden.
-      notice = String(message.text ?? "");
+      showFailure(String(message.text ?? ""));
       root.hidden = false;
       render();
     }

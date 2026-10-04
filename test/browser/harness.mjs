@@ -249,6 +249,26 @@ async function launch(t, cleanups, { openShadow = true, windowSize = "1280,1600"
         pixels: points.map(([x, y]) => [...ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data.slice(0, 3)].join())
       };
     }, { journeyId, kind, file, points }),
+    // Files in the library's top-level exports/ folder: names, or one file's
+    // text (JSON) or size and data URL (PNG).
+    listExports: () => storagePage.evaluate(async () => {
+      const names = [];
+      try { for await (const name of (await (await navigator.storage.getDirectory()).getDirectoryHandle("exports")).keys()) names.push(name); } catch {}
+      return names.sort();
+    }),
+    readExport: (file) => storagePage.evaluate(async (file) => {
+      const blob = await (await (await (await navigator.storage.getDirectory()).getDirectoryHandle("exports")).getFileHandle(file)).getFile();
+      if (file.endsWith(".json")) return { text: await blob.text() };
+      const bitmap = await createImageBitmap(blob);
+      const dataUrl = await new Promise((done) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.readAsDataURL(blob); });
+      return { width: bitmap.width, height: bitmap.height, dataUrl };
+    }, file),
+    // Chrome's download records, newest first. Playwright renames saved files,
+    // so the context is read back from the JSON download's data URL.
+    downloads: () => worker.evaluate(async () => (await chrome.downloads.search({ orderBy: ["-startTime"] })).map((item) => ({
+      id: item.id, state: item.state, mime: item.mime, fileSize: item.fileSize, exists: item.exists,
+      json: item.mime === "application/json" && item.url.startsWith("data:") ? atob(item.url.slice(item.url.indexOf(",") + 1)) : null
+    }))),
     async pixel(journeyId, file, x, y) {
       return (await s.readImage(journeyId, "screenshots", file, [[x, y]])).pixels[0];
     },

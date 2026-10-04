@@ -7,9 +7,12 @@
 //   index.json
 //   journeys/<journey-id>/journey.json
 //   journeys/<journey-id>/screenshots/<frame>.png
-//   journeys/<journey-id>/exports/
+//   exports/<name>.png and <name>.json
+//
+// Journeys saved by earlier versions may also hold journeys/<id>/exports/;
+// those files are left where they are.
 
-import { nextExportName, slugifyJourneyName } from "./export-names.js";
+import { nextExportBase } from "./export-names.js";
 
 export const INDEX_FILE = "index.json";
 export const JOURNEYS_DIRECTORY = "journeys";
@@ -149,9 +152,8 @@ export function createStorage(
     return journeys.getDirectoryHandle(id, { create });
   }
 
-  async function exportsDirectory(journeyId) {
-    const directory = await journeyDirectory(journeyId);
-    return directory.getDirectoryHandle(EXPORTS_DIRECTORY, { create: true });
+  function exportsDirectory() {
+    return root.getDirectoryHandle(EXPORTS_DIRECTORY, { create: true });
   }
 
   async function writeIndex(journeys) {
@@ -324,7 +326,6 @@ export function createStorage(
     };
 
     await directory.getDirectoryHandle(SCREENSHOTS_DIRECTORY, { create: true });
-    await directory.getDirectoryHandle(EXPORTS_DIRECTORY, { create: true });
     // Journey metadata first: the index can always be rebuilt from it.
     await writeJson(directory, JOURNEY_FILE, next);
     await upsertIndexEntry(summarize(next));
@@ -376,11 +377,13 @@ export function createStorage(
       await writeFile(screenshots, fileName, data);
     },
 
-    // Exports are never overwritten: the name is chosen and written inside the
-    // storage lock so concurrent exports cannot pick the same free name.
-    writeExport(journeyId, journeyName, data) {
+    // An image and its context file, written to <root>/exports/ under one base
+    // name. Nothing is overwritten: the name is chosen and written inside the
+    // storage lock, so concurrent exports cannot pick the same free name. If
+    // either write fails, both files are removed.
+    writeExportPair(slug, image, context) {
       return serialize(async () => {
-        const exports = await exportsDirectory(journeyId);
+        const exports = await exportsDirectory();
         const taken = [];
 
         // Any entry, including a folder, would block the name.
@@ -388,22 +391,26 @@ export function createStorage(
           taken.push(name);
         }
 
-        const fileName = nextExportName(slugifyJourneyName(journeyName), taken);
+        const base = nextExportBase(slug, taken);
+        const fileName = `${base}.png`;
+        const contextFileName = `${base}.json`;
 
         try {
-          await writeFile(exports, fileName, data);
+          await writeFile(exports, fileName, image);
+          await writeFile(exports, contextFileName, context);
         } catch (error) {
-          // The name was free, so the empty file left by a failed write is ours.
+          // Both names were free, so anything left behind is ours.
           await exports.removeEntry(fileName).catch(() => {});
+          await exports.removeEntry(contextFileName).catch(() => {});
           throw error;
         }
 
-        return { fileName };
+        return { fileName, contextFileName };
       });
     },
 
-    async listExports(journeyId) {
-      return (await fileNames(await exportsDirectory(journeyId))).sort();
+    async listExports() {
+      return (await fileNames(await exportsDirectory())).sort();
     },
 
     // Removing a screenshot file is how deletions and redactions stop pixels

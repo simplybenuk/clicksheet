@@ -1,5 +1,7 @@
 import { loadRootHandle, saveRootHandle } from "./core/handle-store.js";
-import { createJourneyCoordinator, CaptureError } from "./core/journey-coordinator.js";
+import { createJourneyCoordinator, CaptureError, toDataUrl } from "./core/journey-coordinator.js";
+import { createExportSettings } from "./core/export-settings.js";
+import { createDownloadsExporter } from "./core/downloads.js";
 import { sanitizeCapture } from "./core/capture-image.js";
 import { classifyPage } from "./core/supported-pages.js";
 
@@ -7,6 +9,7 @@ const TOOLBAR_SCRIPT = "content/toolbar.js";
 const TOOLBAR_STYLES = "content/toolbar.css";
 const BINDINGS_KEY = "clicksheet-bindings";
 const BRAND_ICON = "icons/icon-128.png";
+const DOWNLOADS_FOLDER = "Clicksheet";
 
 // Tab ids only mean something for this browser session, so bindings use
 // session storage and disappear when Chrome restarts.
@@ -53,7 +56,20 @@ const browser = {
 // The packaged icon heads every export as part of the brand mark.
 const loadBrandIcon = async () => createImageBitmap(await (await fetch(chrome.runtime.getURL(BRAND_ICON))).blob());
 
-const journeys = createJourneyCoordinator({ loadRootHandle, saveRootHandle, browser, bindings, loadBrandIcon });
+// Saves each image and its context as a pair in Downloads/Clicksheet
+// (core/downloads.js).
+const downloads = createDownloadsExporter({ api: chrome.downloads, toDataUrl, folder: DOWNLOADS_FOLDER });
+
+const journeys = createJourneyCoordinator({
+  loadRootHandle,
+  saveRootHandle,
+  browser,
+  bindings,
+  loadBrandIcon,
+  downloads,
+  exportSettings: createExportSettings(chrome.storage.local),
+  version: chrome.runtime.getManifest().version
+});
 
 chrome.action.onClicked.addListener(openClicksheet);
 
@@ -110,6 +126,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return;
   }
   const tabId = sender.tab?.id;
+  // The Open / Show bar is an extension page inside the widget, because
+  // chrome.downloads.open needs a click in an extension page. It only ever
+  // learns about the export made in its own tab.
+  if (message?.type === "clicksheet:export-bar" && Number.isInteger(tabId)) {
+    journeys.lastExport(tabId).then(respond, () => respond(null));
+    return true;
+  }
   // Pages may only report their own clicks and changes; tab lifecycle events
   // come from Chrome alone.
   if (message?.type === "clicksheet:page-event" && Number.isInteger(tabId) && ["click", "changed"].includes(message.event?.type)) {
@@ -119,7 +142,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === "clicksheet:journey" && Number.isInteger(tabId)) {
     journeys.request(tabId, message.command ?? {}, { url: sender.tab.url, windowId: sender.tab.windowId }).then(
       (view) => respond({ ok: true, view }),
-      (error) => respond({ ok: false, error: userMessage(error) })
+      // A failure carries the tab's current view, so the widget never shows
+      // an error next to state from before the failed command.
+      (error) => respond({ ok: false, error: userMessage(error), view: error?.view ?? null })
     );
     return true;
   }

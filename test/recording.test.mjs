@@ -37,7 +37,7 @@ test("a page-changing click captures once after the delay and marks the precedin
   view = await coordinator.request(1, { action: "snapshot", journeyId: id });
   const [before, after] = view.currentJourney.frames;
   assert.equal(view.currentJourney.frames.length, 2);
-  assert.deepEqual(before.interaction, { type: "click", label: "Settings", rect: { x: 10, y: 5, width: 20, height: 10 }, point: { x: 15, y: 10 } });
+  assert.deepEqual(before.interaction, { type: "click", label: "Settings", role: null, tag: null, rect: { x: 10, y: 5, width: 20, height: 10 }, point: { x: 15, y: 10 } });
   assert.equal(after.kind, "click");
   assert.equal(after.pathname, "/settings");
   assert.equal(after.interaction, null);
@@ -446,4 +446,21 @@ test("switching to a library without the bound Journey releases the recording bi
   const view = await coordinator.request(2, { action: "new" });
   assert.equal(view.recordingElsewhere, false);
   assert.equal(view.controls.record, true);
+});
+
+test("the widget labels a step whose clicked element is under a redaction box as a plain Click", async () => {
+  const env = setup({ redactImage: async (file, masks) => ({ blob: new Blob(["redacted"]), width: 200, height: 100, boxes: masks }) });
+  const created = await env.coordinator.request(1, { action: "new" });
+  const id = created.currentJourney.id;
+  await env.coordinator.request(1, { action: "record", journeyId: id }, env.context);
+  env.browser.page.pathname = "/settings";
+  await env.coordinator.event(1, click("Pay Jane Doe"));
+  await env.coordinator.event(1, { type: "changed" });
+  await env.time.advance(500);
+  let view = await env.coordinator.request(1, { action: "stop", journeyId: id });
+  const frameId = view.currentJourney.frames[0].id;
+  assert.equal(view.currentJourney.frames[0].interaction.label, "Pay Jane Doe");
+  view = await env.coordinator.request(1, { action: "redact", journeyId: id, frameId, masks: [{ x: 0, y: 0, width: 200, height: 100 }] });
+  assert.equal(view.currentJourney.frames[0].interaction.label, "", "the strip and viewer show Click");
+  assert.equal(view.currentJourney.frames[0].interaction.rect.width, 20, "the rest of the click is kept");
 });

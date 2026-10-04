@@ -54,7 +54,7 @@ test("new Journeys get the readable folder layout and keep existing Journeys", a
   const files = snapshot(volume.root);
   for (const id of [first.id, second.id]) {
     assert.equal(`journeys/${id}/screenshots/` in files, true);
-    assert.equal(`journeys/${id}/exports/` in files, true);
+    assert.equal(`journeys/${id}/exports/` in files, false);
   }
 
   assert.deepEqual(await readJson(volume.root, `journeys/${first.id}/journey.json`), first);
